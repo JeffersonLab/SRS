@@ -10,13 +10,14 @@
 DEBUG=1
 #
 #
-BASENAME=TIpcie
+BASENAME=srs
+ARCH=`uname -m`
 
 CC			= gcc
 AR                      = ar
 RANLIB                  = ranlib
-CFLAGS			= -L.
-INCS			= -I.
+CFLAGS			= -L. -L${LINUXVME_LIB}
+INCS			= -I. -I${LINUXVME_INC}
 
 LIBS			= lib${BASENAME}.a
 
@@ -26,31 +27,25 @@ else
 CFLAGS			+= -O2
 endif
 SRC			= ${BASENAME}Lib.c
-HDRS			= $(SRC:.c=.h)
 OBJ			= ${BASENAME}Lib.o
 DEPS			= $(SRC:.c=.d)
 
 all: echoarch $(LIBS)
 
-$(OBJ): $(SRC) $(HDRS)
+%.o: %.c
+	@echo
+	@echo "Building $@ from $<"
 	$(CC) $(CFLAGS) $(INCS) -c -o $@ $(SRC)
 
 $(LIBS): $(OBJ)
+	@echo
+	@echo "Building $@ from $<"
 	$(CC) -fpic -shared $(CFLAGS) $(INCS) -o $(@:%.a=%.so) $(SRC)
 	$(AR) ruv $@ $<
 	$(RANLIB) $@
 
-#links: $(LIBS)
-#	@ln -vsf $(PWD)/$< $(LINUXVME_LIB)/$<
-#	@ln -vsf $(PWD)/$(<:%.a=%.so) $(LINUXVME_LIB)/$(<:%.a=%.so)
-#	@ln -vsf ${PWD}/*Lib.h $(LINUXVME_INC)
-
-#install: $(LIBS)
-#	@cp -v $(PWD)/$< $(LINUXVME_LIB)/$<
-#	@cp -v $(PWD)/$(<:%.a=%.so) $(LINUXVME_LIB)/$(<:%.a=%.so)
-#	@cp -v ${PWD}/*Lib.h $(LINUXVME_INC)
-
 %.d: %.c
+	@echo
 	@echo "Building $@ from $<"
 	@set -e; rm -f $@; \
 	$(CC) -MM -shared $(INCS) $< > $@.$$$$; \

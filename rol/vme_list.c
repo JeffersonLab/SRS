@@ -19,8 +19,7 @@
 
 /* Define Interrupt source and address */
 #define TI_MASTER
-#define TI_READOUT TI_READOUT_EXT_INT /*Interupt mode, external triggers*/
-//TI_READOUT_EXT_POLL  /* Poll for available data, external triggers */
+#define TI_READOUT TI_READOUT_EXT_POLL /*Polling mode, external triggers*/
 #define TI_ADDR    0x100000  /* slot 2 */
 
 /* Decision on whether or not to readout the TI for each block 
@@ -41,25 +40,8 @@
 #include "tiprimary_list.c" /* source required for CODA */
 
 
-/*#kp:######################
-  #include <arpa/inet.h> */
-/*
-#include "/usr/include/arpa/inet.h"
-#include "/usr/include/netinet/in.h"
-#include "/usr/include/stdio.h"
-#include "/usr/include/sys/types.h"
-#include "/usr/include/sys/socket.h"
-#include "/usr/include/unistd.h" 
-#include "/usr/include/stdlib.h" 
-#include "/usr/include/string.h"
-#include "/usr/include/fcntl.h"
-*/
 #include "libSRS.h"
 /*const SRS_bank   = 0x201;*/
-/*#kp:###################### */
-
-
-
 
 /* Default block level */
 unsigned int BLOCKLEVEL=1;
@@ -83,10 +65,6 @@ struct sockaddr_in cli_addr;  socklen_t slen=sizeof(cli_addr);
 int BUFFLEN = 16384; char buf[BUFLEN];  int *ptr=(int*)buf; //int *ptr; 
 //ka: ======== 11/16/15 (want to do it globally and only once) (Moved here from rocTrigger())
 #endif
-
-
-
-
 
 /* function prototype */
 void rocTrigger(int arg);
@@ -157,9 +135,7 @@ rocDownload()
 
   tiSetBlockBufferLevel(BUFFERLEVEL);
 
-
   tiStatus(0);
-
 
   printf("rocDownload: User Download Executed\n");
 
@@ -178,12 +154,17 @@ rocPrestart()
   tiStatus(0);
 
   printf("rocPrestart: User Prestart Executed\n");
+
 #ifdef SRS_DATA_READOUT
   StartOrStopSlowControl(1);//1 or 0 for start or stop SRS
   printf("SRS FEC configuration script also executed..\n");
 
   //Create the socket for UDP connection with SRS (sockfd is defined globally above)
-  createAndBinSocket(&sockfd); printf("socket created. ..\n");
+  if(srsConnect(&sockfd)==0) 
+    printf("socket created. ..\n");
+  else
+    printf("%s: ERROR: Socket to SRS not open\n",
+	   __FUNCTION__);
 #endif
 }
 
@@ -226,11 +207,12 @@ rocEnd()
    // tiDisableRandomTrigger();
 #endif
 
-#ifdef SRS_DATA_READOUT  //===================ka: 10/14/15
+#ifdef SRS_DATA_READOUT
   close(sockfd); 
-  StartOrStopSlowControl(0);//ka: 1 or 0 for start or stop SRS
+  StartOrStopSlowControl(0);
   printf("rocEnd: Ended after %d blocks\n",tiGetIntCount());
-#endif  //===================ka: 10/14/15  
+#endif
+
 }
 
 /****************************************
@@ -241,7 +223,7 @@ rocTrigger(int arg)
 {
   int ii, islot;
   int stat, dCnt, len=0, idata;
-#ifdef SRS_DATA_READOUT  //===================ka: 10/14/15
+#ifdef SRS_DATA_READOUT
   int HowManyEvents=1,channelNo=-1, trigNum=0, bytes_received; //sockfd, //cli for client?
   //createAndBinSocket(&sockfd);
   //ka: ======== 11/16/15 (want to do it globally and only once)
@@ -256,12 +238,6 @@ rocTrigger(int arg)
 
 
   //tiSetOutputPort(1,0,0,0); //BM
-
-  BANKOPEN(5,BT_UI4,0);
-  *dma_dabufp++ = LSWAP(tiGetIntCount());
-  *dma_dabufp++ = LSWAP(0xdead);
-  *dma_dabufp++ = LSWAP(0xcebaf111);
-  BANKCLOSE;
 
 #ifdef TI_DATA_READOUT
   BANKOPEN(4,BT_UI4,0);
@@ -282,22 +258,11 @@ rocTrigger(int arg)
   BANKCLOSE;
 #endif
 
-  //===================ka: 10/14/15
-  /* 
- event_ty = EVTYPE;
- event_no = *rol->nevents;
-
- rol->dabufp = (long *) 0;
- open event type EVTYPE of BT_UI4
-##### kp: ##############
- open bank SRS_bank of BT_UI4
-##### kp: ##############
-   */
-
 #ifdef SRS_DATA_READOUT  
   BANKOPEN(6,BT_UI4,0);  //ka  open SRS_bank
   *dma_dabufp++ = LSWAP(0xda000022);  //output hex da000022
   tiSetOutputPort(1,0,1,0);
+
   while(1)
     {
       rawdata=0;	
@@ -345,20 +310,16 @@ rocTrigger(int arg)
     }
   //close(sockfd); 
   //StartOrStopSlowControl(0);//1 or 0 for start or stop
-  *dma_dabufp++ = LSWAP(0xda0000ff);//output hex da0000ff
   BANKCLOSE;                    //ka: close SRS_bank
-  //===================ka: 10/14/15
 #endif
 
-  //tiSetOutputPort(0,0,0,0); //BM
+  tiSetOutputPort(0,0,0,0);
 
 }
 
 void
 rocCleanup()
 {
-  int islot=0;
-
-  printf("%s: Reset all FADCs\n",__FUNCTION__);
-  
+  srsDisconnect(sockfd);
+  StartOrStopSlowControl(0);
 }

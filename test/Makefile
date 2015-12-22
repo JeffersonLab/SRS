@@ -17,26 +17,32 @@ CROSS_COMPILE		=
 CC			= $(CROSS_COMPILE)gcc
 AR                      = ar
 RANLIB                  = ranlib
-CFLAGS			= -Wall -O2 -I${LINUXVME_INC} -I. -I/usr/include \
-			  -L${LINUXVME_LIB} -L.
+INCS			= -I. -I../ -I${LINUXVME_INC}
+CFLAGS			= -Wall -g ${INCS} \
+			  -L. -L../ -L${LINUXVME_LIB} 
 
-PROGS			= tiLibTest
+PROGS			= srsReadoutTest srsLibTest listenSRSnoROOTnoGPP
+SRC			= $(PROGS:%=%.c)
+DEPS			= $(SRC:%.c=%.d)
 
 all: $(PROGS)
 
 clean distclean:
-	@rm -f $(PROGS) *~ *.so
+	@rm -f $(PROGS) $(DEPS) *~ *.so
 
 %: %.c
-	echo "Making $@"
-	$(CC) $(CFLAGS) -o $@ $(@:%=%.c) $(LIBS_$@) -lrt -ljvme -lti 
+	@echo ""
+	@echo "Building $@ from $<"
+	$(CC) $(CFLAGS) -o $@ $(@:%=%.c) $(LIBS_$@) -lrt -lsrs
 
-fullCrate: fullCrate.c
-	echo "Making $@"
-	$(CC) $(CFLAGS) -o $@ $(@:%=%.c) $(LIBS_$@) -lrt -ljvme -lti -lfadc
+%.d: %.c
+	@echo ""
+	@echo "Building $@ from $<"
+	@set -e; rm -f $@; \
+	$(CC) -MM -shared $(INCS) $< > $@.$$$$; \
+	sed 's,\($*\)\.o[ :]*,\1 $@ : ,g' < $@.$$$$ > $@; \
+	rm -f $@.$$$$
 
-tiMinimizeLatency: tiMinimizeLatency.c
-	echo "Making $@"
-	$(CC) $(CFLAGS) -o $@ $(@:%=%.c) $(LIBS_$@) -lrt -ljvme -lti -lremex
+-include $(DEPS)
 
 .PHONY: all clean distclean
