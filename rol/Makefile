@@ -13,70 +13,57 @@
 # Uncomment DEBUG line for debugging info ( -g and -Wall )
 DEBUG=1
 #
-
-# Plug in your primary readout lists here..
-VMEROL			= vme_list.so #fadc_list.so
-# Add shared library dependencies here.  (jvme, ti, are already included)
-#ROLLIBS			= 
-#ROLLIBS			= -lfadc
-
-ifndef LINUXVME_LIB
-	LINUXVME_LIB	= ${CODA}/extensions/linuxvme/lib
-endif
-ifndef LINUXVME_INC
-	LINUXVME_INC	= ${CODA}/extensions/linuxvme/include
-endif
-
-# DEFs for compiling primary readout lists
-CC			= gcc
-AR                      = ar
-RANLIB                  = ranlib
-ifdef DEBUG
-CFLAGS			= -Wall -g
-else
-CFLAGS			= -O3
-endif
-CFLAGS			+= -w -I${LINUXVME_INC} -I. -I/usr/include -I${CODA}/common/include\
-			  -L${LINUXVME_LIB} -L. -DJLAB
-CFLAGS			+= -lrt -lpthread -ljvme -lti $(ROLLIBS)
-CFLAGS			+= -DLINUX -DDAYTIME=\""`date`"\"
+TIPCIE_PATH		= /daqfs/home/moffit/work/TIpcie
 
 # DEFs for compiling CODA readout lists
+CC			= gcc
 CCRL			= ${CODA_BIN}/ccrl
-CODA_INCS		= -I.  -I${LINUXVME_INC} -I${CODA}/common/include
-CODA_LIBDIRS            = -L. -L${LINUXVME_LIB}
-CODA_LIBS		= -ljvme -lti 
+CODA_INCS		= -I. -I${TIPCIE_PATH} -I${CODA}/common/include
+CODA_LIBDIRS            = -L. -L${TIPCIE_PATH} 
+CODA_LIBS		= -lTIpcie
 CODA_DEFS		= -DLINUX -DDAYTIME=\""`date`"\"
-CODA_CFLAGS		= -O -w -fpic -shared ${CODA_INCS} ${CODA_LIBDIRS} \
+CODA_CFLAGS		= -w -fpic -shared ${CODA_INCS} ${CODA_LIBDIRS} \
 			  ${CODA_LIBS} ${CODA_DEFS}
 ifdef DEBUG
 CODA_CFLAGS		+= -Wall -g
+else
+CODA_CFLAGS		+= -O
 endif
 CRLFILES		= $(wildcard *.crl)
 CFILES			= $(CRLFILES:.crl=.c)
 SOBJS			= $(CRLFILES:.crl=.so)
+DEPS			= $(CRLFILES:.crl=.d)
 
+all: $(SOBJS) 
 
-all: $(VMEROL) $(SOBJS) 
-
-event_list.c: event_list.crl Makefile
+%.c: %.crl
 	@echo
 	@echo "Converting $< to $@"
 	@${CCRL} $<
 
-event_list.so: event_list.c
+%.so: %.c
 	@echo
 	@echo "Building $@ from $<"
 	@echo
 	${CC} ${CODA_CFLAGS} -o $@ $<
 
-%.so: %.c Makefile tiprimary_list.c
+tipcie_list.so: tipcie_list.c
 	@echo
 	@echo "Building $@ from $<"
 	@echo
-	$(CC) -fpic -shared  $(CFLAGS) -DINIT_NAME=$(@:.so=__init) -o $@ $<
+	${CC} ${CODA_CFLAGS} -o $@ $<
 
 clean distclean:
-	@rm -f  $(VMEROL) $(SOBJS) $(CFILES) *~ 
+	@rm -f  $(ROLS) $(SOBJS) $(CFILES) *~ 
+
+%.d: %.c
+	@echo ""
+	@echo "Building $@ from $<"
+	@set -e; rm -f $@; \
+	$(CC) -MM -shared $(CODA_INCS) $< > $@.$$$$; \
+	sed 's,\($*\)\.so[ :]*,\1 $@ : ,g' < $@.$$$$ > $@; \
+	rm -f $@.$$$$
+
+-include $(DEPS)
 
 .PHONY: all

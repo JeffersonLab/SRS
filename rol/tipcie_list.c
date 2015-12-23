@@ -36,11 +36,11 @@
 
 #define FIBER_LATENCY_OFFSET 0x4A  /* measured longest fiber length */
 
-#include "dmaBankTools.h"
-#include "tiprimary_list.c" /* source required for CODA */
+/* #include "dmaBankTools.h" */
+#include "tipcieprimary_list.c" /* source required for CODA */
 
 
-#include "libSRS.h"
+/* #include "libSRS.h" */
 /*const SRS_bank   = 0x201;*/
 
 /* Default block level */

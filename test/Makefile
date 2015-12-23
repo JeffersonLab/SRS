@@ -21,7 +21,7 @@ INCS			= -I. -I../ -I${LINUXVME_INC}
 CFLAGS			= -Wall -g ${INCS} \
 			  -L. -L../ -L${LINUXVME_LIB} 
 
-PROGS			= srsReadoutTest srsLibTest listenSRSnoROOTnoGPP
+PROGS			= srsLibTest
 SRC			= $(PROGS:%=%.c)
 DEPS			= $(SRC:%.c=%.d)
 
