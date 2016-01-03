@@ -10,18 +10,17 @@
 # $Rev$
 #
 
-LINUXVME_LIB	?= ${CODA}/extensions/linuxvme/libs
-LINUXVME_INC	?= ${CODA}/extensions/linuxvme/include
+TIPCIE_PATH		?= ${HOME}/work/TIpcie
 
 CROSS_COMPILE		=
-CC			= $(CROSS_COMPILE)gcc
+CC			= $(CROSS_COMPILE)gcc34
 AR                      = ar
 RANLIB                  = ranlib
-INCS			= -I. -I../ -I${LINUXVME_INC}
+INCS			= -I. -I../ -I${TIPCIE_PATH}
 CFLAGS			= -Wall -g ${INCS} \
-			  -L. -L../ -L${LINUXVME_LIB} 
+			  -L. -L../ -L${TIPCIE_PATH}
 
-PROGS			= srsLibTest
+PROGS			= srsLibTest srsReadoutTest_TIpcie
 SRC			= $(PROGS:%=%.c)
 DEPS			= $(SRC:%.c=%.d)
 
@@ -33,7 +32,7 @@ clean distclean:
 %: %.c
 	@echo ""
 	@echo "Building $@ from $<"
-	$(CC) $(CFLAGS) -o $@ $(@:%=%.c) $(LIBS_$@) -lrt -lsrs
+	$(CC) $(CFLAGS) -o $@ $(@:%=%.c) $(LIBS_$@) -lrt -lsrs -lTIpcie
 
 %.d: %.c
 	@echo ""

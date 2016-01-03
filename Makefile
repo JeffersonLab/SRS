@@ -13,7 +13,7 @@ DEBUG=1
 BASENAME=srs
 ARCH=`uname -m`
 
-CC			= gcc
+CC			= gcc34
 AR                      = ar
 RANLIB                  = ranlib
 CFLAGS			= -L. -L${LINUXVME_LIB}

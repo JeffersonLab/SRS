@@ -35,8 +35,6 @@ void closeup();
 
 #define BLOCKLEVEL 1
 
-#define PERIOD 32000
-
 #define DO_READOUT
 
 /**********************************************************************

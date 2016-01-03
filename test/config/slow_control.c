@@ -92,9 +92,7 @@ SendData() {
 }
 
 ReceiveData(int code) {
-  /* if ((g_pid = fork()) == 0)  */
-    {
-    printf("yep\n");
+  if ((g_pid = fork()) == 0) {
     int n;
     char buffer[SIZE];
     int *ptr;
@@ -114,7 +112,7 @@ ReceiveData(int code) {
     else if (code == 8) printf("EVBLD_MODE: received %d bytes 0x%X \n",n,*ptr);
     else if (code == 9) printf("EVBLD_EVENTINFOTYPE: received %d bytes 0x%X \n",n,*ptr);
     else if (code == 10) printf("BCLK_EVENTINFODATA: received %d bytes 0x%X \n",n,*ptr);
-    printf("n=%d\n",n);
+
     int i=0;
     for(i=0; i<n; i++)
       {
@@ -125,7 +123,6 @@ ReceiveData(int code) {
     printf("\n");
     exit(0);
   }
-
 }
 
 void charToHex(char *buffer,int *buf) {
@@ -197,6 +194,5 @@ int main(int argc, char **argv) {
   PrepareSocket(g_ip,g_port);
   SendData();
 
-  ReceiveData(0);
   return 0;
 }

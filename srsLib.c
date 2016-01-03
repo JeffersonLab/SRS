@@ -68,15 +68,15 @@ srsSlowControl(int enable)//1 or 0 for start or stop
 
   commandDirectory = getenv("SRS_SLOWCONTROL_DIR");
   if(commandDirectory==NULL)
-    sprintf(commandDirectory,"./SRSconfig");
+    sprintf(commandDirectory,".");
   
   if(enable)
     {
-      sprintf(command,"source %s/configureFEC.sh",commandDirectory);
+      sprintf(command,"source %s/sruConfigFEC10012.sh",commandDirectory);
       system(command);
     }
 
-  sprintf(command,"source %s/%s_pRad.sh",commandDirectory,ToDo[enable]);  
+  sprintf(command,"source %s/%s.sh",commandDirectory,ToDo[enable]);  
   system(command);
 }
 
@@ -163,7 +163,7 @@ srsTest()
   char *ip;
   int port = 0;
 
-  ReadFile("SRSconfig/slow_control/read.txt", (char **)&ip, (int *)&port);
+  ReadFile("../SRSconfig/slow_control/read.txt", (char **)&ip, (int *)&port);
   printf("ip = %s   port = %d\n",ip, port);
   PrepareSocket(ip, port);
   SendData();
@@ -175,7 +175,7 @@ srsTest()
 
 
 int 
-listenSRS4CODAv0(int sockfd, volatile unsigned int* buf)
+listenSRS4CODAv0(int sockfd, volatile unsigned int* buf_in, int nwrds)
 {
   int HowManyEvents=1,channelNo=-1, trigNum=0, n; //cli for client?
 
@@ -183,21 +183,26 @@ listenSRS4CODAv0(int sockfd, volatile unsigned int* buf)
 
   struct sockaddr_in cli_addr;  
   socklen_t slen=sizeof(cli_addr);  
-  int *ptr; 
+  unsigned int *ptr; 
   int Index=0;  
   unsigned int rawdata=0;
   int nwords=0;
   unsigned long long total=0;
+  int l_errno=0;
+  unsigned int *buf;
 
-  ptr = (int*)buf; 
+  buf = malloc(nwrds*sizeof(unsigned int));
+
+  ptr = (unsigned int*)buf; 
   while(1)
     {
       if(srsDebugMode)
-	printf("%s: call recvfrom\n",__FUNCTION__);
+	printf("%s: call recvfrom  buf = 0x%lx\n",__FUNCTION__,&buf);
 
       before = rdtsc();
-      n = recvfrom(sockfd, (void *)ptr, 20*1024*sizeof(unsigned int), 
+      n = recvfrom(sockfd, (void *)ptr, nwrds*sizeof(unsigned int), 
 		   0, (struct sockaddr*)&cli_addr, &slen); 
+      l_errno = errno;
       after = rdtsc();
 
       diff = after-before;
@@ -210,7 +215,10 @@ listenSRS4CODAv0(int sockfd, volatile unsigned int* buf)
 	  if(errno == EAGAIN)
 	    printf("%s: timeout\n",__FUNCTION__);
 	  else
-	    perror("recvfrom");
+	    {
+	      printf("%s: errno = %d  sockfd = %d\n",__FUNCTION__,l_errno,sockfd);
+	      perror("recvfrom");
+	    }
 	  return -1;
 	}
 
@@ -225,7 +233,7 @@ listenSRS4CODAv0(int sockfd, volatile unsigned int* buf)
 
 	  for ( Index=0;Index<n/4;Index++)
 	    {
-	      rawdata = *ptr++; 
+	      rawdata = *ptr++;
 	      nwords++;
 	      if(srsDebugMode)
 		printf("%d  0x%x\n",Index,rawdata);
@@ -384,13 +392,22 @@ ReceiveData()
 {
   /* if ((g_pid = fork()) == 0) */
     {
-      int n;
+      int n, try=0;;
       unsigned int buffer[SIZE];
       unsigned int *ptr;
+      int l_errno;
       
       ptr = (unsigned int*)buffer;
       memset(buffer,0,SIZE);
       n = recvfrom(g_sockfd,(void *)ptr,sizeof(buffer),0,(struct sockaddr *) &g_cliaddr,&g_len);
+      while ((n<0) && (try<10))
+	{
+	  try++;
+	  l_errno = errno;
+	  perror("recvfrom");
+	  printf("l_errno = %d\n",l_errno);
+	  n = recvfrom(g_sockfd,(void *)ptr,sizeof(buffer),0,(struct sockaddr *) &g_cliaddr,&g_len);
+	}
 
       printf("%s: Received %d bytes\n",__FUNCTION__,n);
 

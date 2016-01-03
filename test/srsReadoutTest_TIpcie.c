@@ -1,123 +1,78 @@
 /*
  * File:
- *    tipReadoutTest
+ *    srsReadoutTest_TIpcie
  *
  * Description:
- *    Test TIpcie readout with Linux Driver
- *    and TI library
+ *    Test SRS readout with Linux Driver
+ *    and TIpcie library
  *
  *
  */
 
 
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <sys/signal.h>
 #include "TIpcieLib.h"
+#include "srsLib.h"
 /* #include "remexLib.h" */
 
 #define BLOCKLEVEL 0x1
-
+#define PERIOD 32000
 #define DO_READOUT
 
-/* Interrupt Service routine */
-void
-mytiISR(int arg)
-{
-  volatile unsigned short reg;
-  int dCnt, len=0,idata;
-  int tibready=0, timeout=0;
-  int printout = 1000;
-  int dataCheck=0;
-  volatile unsigned int data[120];
+int srsFD;
+unsigned long long calib=0;
+#define TI_DATA_SIZE  120
+#define SRS_DATA_SIZE (20*1024)
+volatile unsigned int TIdata[TI_DATA_SIZE], SRSdata[SRS_DATA_SIZE];
 
-  unsigned int tiIntCount = tipGetIntCount();
 
-#ifdef DO_READOUT
 
-#ifdef DOINT
-  tibready = tipBReady();
-  if(tibready==ERROR)
-    {
-      printf("%s: ERROR: tiIntPoll returned ERROR.\n",__FUNCTION__);
-      return;
-    }
-  if(tibready==0 && timeout<100)
-    {
-      printf("NOT READY!\n");
-      tibready=tipBReady();
-      timeout++;
-    }
-
-  if(timeout>=100)
-    {
-      printf("TIMEOUT!\n");
-      return;
-    }
-#endif
-
-  dCnt = tipReadBlock((volatile unsigned int *)&data,8,0);
-  /* dCnt = tipReadTriggerBlock((volatile unsigned int *)&data); */
-
-  if(dCnt!=8)
-    {
-      printf("**************************************************\n");
-      printf("No data or error.  dCnt = %d\n",dCnt);
-      printf("**************************************************\n");
-      dataCheck=ERROR;
-    }
-  else
-    {
-      /* dataCheck = tiCheckTriggerBlock(data); */
-    }
-
-#define READOUT
-#ifdef READOUT
-  if((tiIntCount%printout==0) || (dCnt!=8))
-    {
-      printf("Received %d triggers...\n",
-	     tiIntCount);
-
-      len = dCnt;
-      
-      for(idata=0;idata<(len);idata++)
-	{
-	  if((idata%4)==0) printf("\n\t");
-	  printf("  0x%08x ",(unsigned int)(data[idata]));
-	}
-      printf("\n\n");
-    }
-#endif
-
-#else /* DO_READOUT */
-
-#endif /* DO_READOUT */
-  if(tiIntCount%printout==0)
-    printf("intCount = %d\n",tiIntCount );
-
-  if((dataCheck!=OK) || (dCnt!=8))
-    {
-      getchar();
-    }
-
-}
+/* ISR Prototype */
+void mytiISR(int arg);
+void sig_handler(int signo);
+void closeup();
+extern unsigned long long int rdtsc(void);
 
 
 int 
 main(int argc, char *argv[]) 
 {
-
   int stat;
+  unsigned long long before,after,diff=0;
+
+  before = rdtsc();
+  sleep(1);
+  after = rdtsc();
+  calib = after-before;
+  signal(SIGINT,sig_handler);
 
   printf("\nJLAB TI Tests\n");
   printf("----------------------------\n");
 
 /*   remexSetCmsgServer("dafarm28"); */
 /*   remexInit(NULL,1); */
+  
+  /* TIdata = (unsigned int *)malloc(TI_DATA_SIZE*sizeof(unsigned int)); */
+  /* if(TIdata==NULL) */
+  /*   { */
+  /*     perror("malloc"); */
+  /*     exit(-1); */
+  /*   } */
+  /* SRSdata = (unsigned int *)malloc(SRS_DATA_SIZE*sizeof(unsigned int)); */
+  /* if(SRSdata==NULL) */
+  /*   { */
+  /*     perror("malloc"); */
+  /*     exit(-1); */
+  /*   } */
 
-  /* printf("Size of DMANODE    = %d (0x%x)\n",sizeof(DMANODE),sizeof(DMANODE)); */
-  /* printf("Size of DMA_MEM_ID = %d (0x%x)\n",sizeof(DMA_MEM_ID),sizeof(DMA_MEM_ID)); */
 
+/**********************************************************************
+ * TI SETUP
+ **********************************************************************/
   tipOpen();
 
   /* Set the TI structure pointer */
@@ -125,14 +80,6 @@ main(int argc, char *argv[])
   tipCheckAddresses();
 
   tipDefinePulserEventType(0xAA,0xCD);
-
-  /* tipSetSyncEventInterval(10); */
-
-  /* tipSetEventFormat(3); */
-
-  /* char mySN[20]; */
-  /* printf("0x%08x\n",tiGetSerialNumber((char **)&mySN)); */
-  /* printf("mySN = %s\n",mySN); */
 
 #ifndef DO_READOUT
   tipDisableDataReadout(0);
@@ -174,6 +121,20 @@ main(int argc, char *argv[])
     
   tipSetBlockLimit(0);
 
+/**********************************************************************
+ * SRS Setup
+ **********************************************************************/
+  srsSetDebugMode(0);
+
+  if(srsConnect((int*)&srsFD)==0) 
+    printf("socket created. .. (%d)\n",srsFD);
+  else
+    printf("%s: ERROR: Socket to SRS not open\n",
+	   __FUNCTION__);
+
+  srsSlowControl(1);
+
+
   printf("Hit enter to reset stuff\n");
   getchar();
 
@@ -182,8 +143,6 @@ main(int argc, char *argv[])
   tipTrigLinkReset();
   usleep(10000);
 
-  int again=0;
- AGAIN:
   usleep(10000);
   tipSyncReset(1);
 
@@ -197,18 +156,19 @@ main(int argc, char *argv[])
 
   tipIntEnable(0);
   tipStatus(1);
-  tipPCIEStatus(1);
+  /* tipPCIEStatus(1); */
+
 #define SOFTTRIG
 #ifdef SOFTTRIG
-  tipSetRandomTrigger(1,0x7);
+  /* tipSetRandomTrigger(1,0x7); */
   /* taskDelay(10); */
-  /* tipSoftTrig(1,1,0xffff/2,1); */
+  tipSoftTrig(1,2,PERIOD,1);
 #endif
 
   printf("Hit any key to Disable TID and exit.\n");
   getchar();
   tipStatus(1);
-  tipPCIEStatus(1);
+  /* tipPCIEStatus(1); */
 
 #ifdef SOFTTRIG
   /* No more soft triggers */
@@ -221,15 +181,124 @@ main(int argc, char *argv[])
 
   tipIntDisconnect();
 
-  if(again==1)
+ CLOSE:
+  closeup();
+  exit(0);
+}
+
+void closeup()
+{
+  srsSlowControl(0);
+  sleep(1);
+  close(srsFD);
+
+  tipClose();
+
+  /* if(SRSdata) */
+  /*   free((void *)SRSdata); */
+
+  /* if(TIdata) */
+  /*   free(TIdata); */
+}
+
+void sig_handler(int signo)
+{
+  int i, status;
+
+  switch (signo) {
+  case SIGINT:
+    printf("\n\n");
+    closeup();
+    exit(1);  /* exit if CRTL/C is issued */
+  }
+  return;
+}
+
+/* Interrupt Service routine */
+void
+mytiISR(int arg)
+{
+  int dCnt_ti=0, dCnt_srs=0, len=0,idata;
+  int printout = 1000;
+  int dataCheck=0;
+  unsigned long long before,after,diff=0;
+  int ievent=0;
+  unsigned int tiIntCount = tipGetIntCount();
+
+  dCnt_ti = tipReadBlock((volatile unsigned int *)&TIdata,
+			 TI_DATA_SIZE,0);
+  /* dCnt_ti = tipReadTriggerBlock((volatile unsigned int *)&data); */
+
+  if(dCnt_ti<=0)
     {
-      again=0;
-      goto AGAIN;
+      printf("**************************************************\n");
+      printf("TI: No data or error.  dCnt = %d\n",dCnt_ti);
+      printf("**************************************************\n");
+      dataCheck=ERROR;
+    }
+  else
+    {
+      /* dataCheck = tiCheckTriggerBlock(data); */
     }
 
+  before = rdtsc();
+  for(ievent=0; ievent<BLOCKLEVEL; ievent++)
+    {
+      dCnt_srs = listenSRS4CODAv0(srsFD, 
+				  (volatile unsigned int *)&SRSdata,
+				  SRS_DATA_SIZE);
+      
+      if(dCnt_srs<=0)
+	{
+	  printf("**************************************************\n");
+	  printf("SRS: No data or error.  dCnt = %d\n",dCnt_srs);
+	  printf("**************************************************\n");
+	  dataCheck=ERROR;
+	}
+      else
+	{
+	  printf("SRS dCnt = %d\n",dCnt_srs);
+	}      
+    }
+  after = rdtsc();
+  diff = after-before;
 
- CLOSE:
-  tipClose();
-  exit(0);
+  if(tiIntCount%printout==0)
+    {
+      printf("Received %d triggers...\n",
+	     tiIntCount);
+
+#define PRINTOUT_TI
+#ifdef PRINTOUT_TI
+      len = dCnt_ti;
+      
+      for(idata=0;idata<(len);idata++)
+	{
+	  if((idata%4)==0) printf("\n\t");
+	  printf("  0x%08x ",(unsigned int)(TIdata[idata]));
+	}
+      printf("\n\n");
+#endif /* PRINTOUT_TI */
+
+#define PRINTOUT_SRS
+#ifdef PRINTOUT_SRS
+      len = dCnt_srs;
+      
+      for(idata=0;idata<(len);idata++)
+	{
+	  if((idata%4)==0) printf("\n\t");
+	  printf("  0x%08x ",(unsigned int)(SRSdata[idata]));
+	}
+      printf("\n\n");
+#endif /* PRINTOUT_TI */
+    }
+
+  if(dataCheck!=OK)
+    {
+      getchar();
+    }
+
+  tipSoftTrig(1,2,PERIOD,1);
+
 }
 
