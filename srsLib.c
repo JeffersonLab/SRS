@@ -43,23 +43,31 @@
 #include <sys/un.h>      /* for Unix domain sockets */
 #include <ctype.h>
 #include <byteswap.h>
+#include <pthread.h>
 #include "srsLib.h"
 
 static int srsDebugMode=0; 
-char command[500], cDir[200]="";
+static int srsSockFD[MAX_FEC];
 unsigned long long before, after, diff=0;
-static void ReadFile(char *path, char **ip, int *port);
-void PrepareSocket(char *ip_addr,int port_number);
-void SendData();
-void ReceiveData();
-unsigned long long int rdtsc(void);
 
+static int srsPrepareSocket(char *ip_addr,int port_number);
+static int srsSendData();
+static int srsReceiveData(unsigned int *buffer, int nwords);
+static int srsCloseSocket();
+static int srsReadFile(char *path, char *ip, int *port, unsigned int *obuffer);
+static unsigned long long int rdtsc(void);
+
+/* Mutex to guard SRS read/writes */
+pthread_mutex_t     srsMutex = PTHREAD_MUTEX_INITIALIZER;
+#define SRSLOCK     if(pthread_mutex_lock(&srsMutex)<0) perror("pthread_mutex_lock");
+#define SRSUNLOCK   if(pthread_mutex_unlock(&srsMutex)<0) perror("pthread_mutex_unlock");
 
 void 
 srsSlowControl(int enable)//1 or 0 for start or stop
 {
   char *commandDirectory;   
   char ToDo[2][20]={"stop","start"};
+  char command[500];
 
   if(enable)
     enable=1;
@@ -142,45 +150,11 @@ srsConnect(int *sockfd) /* formally createAndBinSocket */
 
 #define SIZE 65504
 
-int g_sockfd,g_sockfd2,g_n,g_fd;
-socklen_t g_len,g_servlen;
-struct sockaddr_in g_servaddr,g_servaddr2;
-struct sockaddr_in g_cliaddr;
-
-int g_broadcast = 1;
-pid_t g_pid;
-char g_buffer[SIZE],g_buf[SIZE];
-int g_byte = 0;
-char g_ip[100];
-int g_port = 0;
-
-
-/* Test to see if the normal register can be accessed well within the library */
-/* Dec. 23, 2015 - It works */
-void 
-srsTest()
-{
-  char *ip;
-  int port = 0;
-
-  ReadFile("../SRSconfig/slow_control/read.txt", (char **)&ip, (int *)&port);
-  printf("ip = %s   port = %d\n",ip, port);
-  PrepareSocket(ip, port);
-  SendData();
-  
-  ReceiveData();
-
-  close(g_sockfd);
-}
-
 
 int 
-listenSRS4CODAv0(int sockfd, volatile unsigned int* buf_in, int nwrds)
+srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blocklevel)
 {
-  int HowManyEvents=1,channelNo=-1, trigNum=0, n; //cli for client?
-
-/*   srsConnect(&sockfd); */
-
+  int channelNo=-1, trigNum=0, n; //cli for client?
   struct sockaddr_in cli_addr;  
   socklen_t slen=sizeof(cli_addr);  
   unsigned int *ptr; 
@@ -194,10 +168,11 @@ listenSRS4CODAv0(int sockfd, volatile unsigned int* buf_in, int nwrds)
   buf = malloc(nwrds*sizeof(unsigned int));
 
   ptr = (unsigned int*)buf; 
+
   while(1)
     {
       if(srsDebugMode)
-	printf("%s: call recvfrom  buf = 0x%lx\n",__FUNCTION__,&buf);
+	printf("%s: call recvfrom  buf = 0x%lx\n",__FUNCTION__,(unsigned long)&buf);
 
       before = rdtsc();
       n = recvfrom(sockfd, (void *)ptr, nwrds*sizeof(unsigned int), 
@@ -221,9 +196,6 @@ listenSRS4CODAv0(int sockfd, volatile unsigned int* buf_in, int nwrds)
 	    }
 	  return -1;
 	}
-
-      if(trigNum==HowManyEvents) 
-	break;
 
       if (n>=4)
 	{
@@ -256,6 +228,11 @@ listenSRS4CODAv0(int sockfd, volatile unsigned int* buf_in, int nwrds)
 		}
 	    }
 	}
+
+      if(trigNum==blocklevel) 
+	break;
+
+
     }
 
 /*   printf("%s: total = %lld\n",__FUNCTION__,total); */
@@ -273,26 +250,98 @@ srsSetDebugMode(int enable)
     srsDebugMode=0;
 }
 
+int
+srsExecConfigFile(char *filename)
+{
+  char ip[100];
+  int port = 0;
+  unsigned int buf[50];
+  int iword, nwords=0;
+
+  printf("%s: Executing commands from \"%s\"\n",
+	 __FUNCTION__,filename);
+
+  nwords = srsReadFile(filename, (char *)&ip, (int *)&port,
+		       (unsigned int *)&buf);
+
+  if(srsDebugMode)
+    {
+      printf("%s: Writing to port %d  ip %s\n",
+	     __FUNCTION__,port, ip);
+      for(iword=0; iword<nwords; iword++)
+	printf("%2d: 0x%08x\n",iword,bswap_32(buf[iword]));
+    }
+
+  SRSLOCK;
+  if(srsPrepareSocket(ip, port)<0)
+    {
+      printf("%s: Unable to open/prepare socket\n",__FUNCTION__);
+      srsCloseSocket();
+      SRSUNLOCK;
+      return -1;
+    }
+
+  if(srsSendData(buf,nwords)<0)
+    {
+      printf("%s: Unable to send data\n",__FUNCTION__);
+      srsCloseSocket();
+      SRSUNLOCK;
+      return -1;
+    }
+  
+  nwords = srsReceiveData((unsigned int *)&buf, 50);
+  if(nwords<0)
+    {
+      printf("%s: Failed to receive data\n",__FUNCTION__);
+      srsCloseSocket();
+      SRSUNLOCK;
+      return -1;
+    }
+
+  if(srsDebugMode)
+    {
+      printf("%s: Response:\n",__FUNCTION__);
+      for(iword=0; iword<nwords; iword++)
+	printf("%2d: 0x%08x\n",iword,bswap_32(buf[iword]));
+    }
+
+  srsCloseSocket();
+  SRSUNLOCK;
+
+  return 0;
+}
+
+void 
+srsTest()
+{
+  srsExecConfigFile("../SRSconfig/slow_control/read.txt");
+}
+
 /* UDP Send/Receive commands */
+int g_sockfd;
+struct sockaddr_in g_servaddr;
 
 
-struct addrinfo *
+static struct addrinfo *
 host_serv(const char *host, const char *serv, int family, int socktype) 
 {
   struct addrinfo hints, *res;
-  
+
   memset(&hints,0,sizeof(struct addrinfo));
   hints.ai_flags = AI_CANONNAME; // returns canonical name
   hints.ai_family = family; // AF_UNSPEC AF_INET AF_INET6 etc...
   hints.ai_socktype = socktype; // 0 SOCK_STREAM SOCK_DGRAM
 
-  if ((g_n = getaddrinfo(host,serv,&hints,&res)) != 0) 
-    return NULL;
+  if (getaddrinfo(host,serv,&hints,&res) != 0) 
+    {
+      perror("getaddrinfo");
+      return NULL;
+    }
   
   return (res);    
 }
 
-char* 
+static char* 
 sock_ntop_host(const struct sockaddr *sa, socklen_t salen) 
 {
   static char str[128];		/* Unix domain is largest */
@@ -320,25 +369,21 @@ sock_ntop_host(const struct sockaddr *sa, socklen_t salen)
 
 
 //********************** create a socket ******************************************
-void 
-PrepareSocket(char *ip_addr,int port_number) 
+static int
+srsPrepareSocket(char *ip_addr,int port_number) 
 {
+  int rval=0;
   struct addrinfo *ai;
   char *h;
   struct timeval socket_timeout={0,900000}; /* 900 microsecond time out */
   int stat;
 
   g_sockfd = socket(AF_INET,SOCK_DGRAM,0);  
-
-  /* if (g_broadcast == 1)  */
-  /*   { */
-  /*     const int on = 1; */
-  /*     setsockopt(g_sockfd, */
-  /* 		 SOL_SOCKET, */
-  /* 		 SO_RCVTIMEO, */
-  /* 		 /\* SO_BROADCAST, *\/ */
-  /* 		 &socket_timeout,sizeof(socket_timeout)); */
-  /*   } */
+  if(g_sockfd<0)
+    {
+      perror("socket");
+      return -1;
+    }
 
   stat = setsockopt(g_sockfd,
 		    SOL_SOCKET,
@@ -347,7 +392,7 @@ PrepareSocket(char *ip_addr,int port_number)
   if(stat!=0)
     {
       perror("setsockopt");
-      printf("%s: errno = %d\n",__FUNCTION__,errno);
+      rval=-1;
     }
 
   memset(&g_servaddr,0,sizeof(g_servaddr));
@@ -357,78 +402,110 @@ PrepareSocket(char *ip_addr,int port_number)
   // set the source port
   //
   g_servaddr.sin_port = htons(6007);
-  bind(g_sockfd,(struct sockaddr *)& g_servaddr, sizeof(g_servaddr));
+  stat = bind(g_sockfd,(struct sockaddr *)& g_servaddr, sizeof(g_servaddr));
+  if (stat==-1) 
+    {
+      perror("bind");
+      return -1;
+    }
+  else
+    {
+      if(srsDebugMode)
+	printf("%s: DEBUG: bind() successful\n",__FUNCTION__);
+    }
 
   //
   // set the destination port
   //
   g_servaddr.sin_port = htons(port_number);
   ai = host_serv(ip_addr,NULL,AF_INET,SOCK_DGRAM);
+  if(ai==NULL)
+    {
+      printf("%s: host_serv returned NULL\n",__FUNCTION__);
+      return -1;
+    }
+
   h = sock_ntop_host(ai->ai_addr,ai->ai_addrlen);
-  inet_pton(AF_INET,(ai->ai_canonname ? h : ai->ai_canonname),&g_servaddr.sin_addr);
-  g_servlen = sizeof(g_servaddr);
+  stat = inet_pton(AF_INET,(ai->ai_canonname ? h : ai->ai_canonname),&g_servaddr.sin_addr);
+  if(stat==0)
+    {
+      printf("%s: Invalid network address (%s)\n",
+	     __FUNCTION__,(ai->ai_canonname ? h : ai->ai_canonname));
+    }
+  else if(stat<0)
+    {
+      perror("inet_pton");
+      rval = -1;
+    }
+
   freeaddrinfo(ai);  
+
+  return rval;
 }
 
 //
 // Start to send data
 //
-void
-SendData() 
+static int
+srsSendData(unsigned int *buffer, int nwords) 
 {
-  int num;
+  int dSent=0;
   
-  num = sendto(g_sockfd,g_buffer,g_byte,0,(struct sockaddr *)&g_servaddr,sizeof(g_servaddr));
+  dSent = sendto(g_sockfd,buffer,(nwords<<2),0,
+		 (struct sockaddr *)&g_servaddr,sizeof(g_servaddr));
 
-  if ( num == -1) 
+  if ( dSent == -1) 
     {
-      perror ("error sending buffer using sendto");
-      return;
+      perror("sendto");
+      return -1;
     }
+  return (dSent>>2);
 }
 
-void
-ReceiveData() 
+static int
+srsReceiveData(unsigned int *buffer, int nwords) 
 {
-  /* if ((g_pid = fork()) == 0) */
+  int n, try=0;
+  unsigned int *ptr;
+  int l_errno;
+  int dCnt;
+  socklen_t g_len;
+  struct sockaddr_in g_cliaddr;
+      
+  n = recvfrom(g_sockfd,(void *)buffer,nwords*sizeof(unsigned int),
+	       0,(struct sockaddr *) &g_cliaddr,&g_len);
+  while ((n<0) && (try<10))
     {
-      int n, try=0;;
-      unsigned int buffer[SIZE];
-      unsigned int *ptr;
-      int l_errno;
-      
-      ptr = (unsigned int*)buffer;
-      memset(buffer,0,SIZE);
-      n = recvfrom(g_sockfd,(void *)ptr,sizeof(buffer),0,(struct sockaddr *) &g_cliaddr,&g_len);
-      while ((n<0) && (try<10))
-	{
-	  try++;
-	  l_errno = errno;
-	  perror("recvfrom");
-	  printf("l_errno = %d\n",l_errno);
-	  n = recvfrom(g_sockfd,(void *)ptr,sizeof(buffer),0,(struct sockaddr *) &g_cliaddr,&g_len);
-	}
-
-      printf("%s: Received %d bytes\n",__FUNCTION__,n);
-
-      int i=0;
-      /* for(i=0; i<n; i++) */
-      /* 	{ */
-      /* 	  if((i%4)==0) printf("\n%4d: ",i); */
-      /* 	  printf(" %02x",buffer[i] &0xff); */
-      /* 	} */
-
-      for(i=0; i<n/4; i++)
-	{
-	  printf("%4d: %08x  %08x\n",i,*ptr++,bswap_32(buffer[i]));
-	}
-      
-      printf("\n");
-      return;
+      try++;
+      l_errno = errno;
+      perror("recvfrom");
+      n = recvfrom(g_sockfd,(void *)ptr,nwords*sizeof(unsigned int),
+		   0,(struct sockaddr *) &g_cliaddr,&g_len);
     }
+  dCnt = n>>2;
+
+  if(try==10)
+    {
+      printf("%s: ERROR: Timeout\n",__FUNCTION__);
+      return -1;
+    }
+
+  if(srsDebugMode)
+    {
+      int i;
+      printf("%s: Received %d bytes\n",__FUNCTION__,n);
+      for(i=0; i<dCnt; i++)
+	{
+	  printf("%4d: %08x  %08x\n",i,buffer[i],bswap_32(buffer[i]));
+	}
+	  
+      printf("\n");
+    }
+
+  return dCnt;
 }
 
-void 
+static void 
 charToHex(char *buffer,int *buf) 
 {
   int i;
@@ -452,21 +529,37 @@ charToHex(char *buffer,int *buf)
   *buf = tot;
 }
 
-static void 
-ReadFile(char *path, char **ip, int *port) 
+static int
+srsCloseSocket()
+{
+  if(g_sockfd)
+    {
+      if(close(g_sockfd)!=0)
+	{
+	  perror("close");
+	  return -1;
+	}
+    }
+
+  return 0;
+}
+
+static int
+srsReadFile(char *path, char *ip, int *port, unsigned int *obuffer)
 {
   FILE *pFile;
-  int *buf;;
+  int *buf;
   char buffer[100];
+  int nwords;
   
-  memset(g_buffer,0,SIZE);
-  buf = (int*)g_buffer;
+  buf = (int*)obuffer;
   memset(buffer,0,100);
   pFile = fopen (path , "r");
   if (pFile == NULL) 
     {
-      printf ("Error opening file %s",path);
-      exit(0);
+      perror("fopen");
+      printf("%s: Error opening file %s",__FUNCTION__,path);
+      return -1;
     } 
   else 
     {
@@ -474,14 +567,12 @@ ReadFile(char *path, char **ip, int *port)
       // IP
       //
       fgets (buffer,100,pFile);
-      snprintf(g_ip,sizeof(g_ip),"%s",buffer);
-      *ip = g_ip;
+      strncpy(ip,buffer,100);
       //
       // PORT
       //
       fgets (buffer,100,pFile);
-      g_port = atoi(buffer);
-      *port = g_port;
+      *port = atoi(buffer);
       //
       // INFO
       //
@@ -491,14 +582,16 @@ ReadFile(char *path, char **ip, int *port)
 	  charToHex(buffer,buf);
 	  *buf = htonl(*buf);
 	  buf++;
-	  g_byte+=4;
+	  nwords++;
 	}
-      printf("g_byte = %d\n",g_byte);
       fclose (pFile);
     }
+
+  return nwords;
 }
 
-unsigned long long int rdtsc(void)
+static unsigned long long int 
+rdtsc(void)
 {
   /*    unsigned long long int x; */
   unsigned a, d;

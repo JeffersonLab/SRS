@@ -5,10 +5,12 @@
  *
  *****************/
 
+#define MAX_FEC 8
+
 void  srsSlowControl(int enable);
 int   srsConnect(int *sockfd);
 void  receiveData(int sockfd, int *nn, char buf[]);
-int   listenSRS4CODAv0(int sockfd, volatile unsigned int* buf, int nwrds);
+int   srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blocklevel);
 void  srsSetDebugMode(int enable);
 
 #endif /* __SRSLIB__ */
