@@ -50,6 +50,10 @@ static int srsDebugMode=0;
 static int srsSockFD[MAX_FEC];
 unsigned long long before, after, diff=0;
 
+static int srsSlowControl(char *ip, int port, 
+			  unsigned int *req_fields, int nfields,
+			  unsigned int *ret_data);
+static int srsParseResponse(unsigned int *ibuf, unsigned int *obuf, int nwords);
 static int srsPrepareSocket(char *ip_addr,int port_number);
 static int srsSendData();
 static int srsReceiveData(unsigned int *buffer, int nwords);
@@ -61,32 +65,6 @@ static unsigned long long int rdtsc(void);
 pthread_mutex_t     srsMutex = PTHREAD_MUTEX_INITIALIZER;
 #define SRSLOCK     if(pthread_mutex_lock(&srsMutex)<0) perror("pthread_mutex_lock");
 #define SRSUNLOCK   if(pthread_mutex_unlock(&srsMutex)<0) perror("pthread_mutex_unlock");
-
-void 
-srsSlowControl(int enable)//1 or 0 for start or stop
-{
-  char *commandDirectory;   
-  char ToDo[2][20]={"stop","start"};
-  char command[500];
-
-  if(enable)
-    enable=1;
-  else
-    enable=0;
-
-  commandDirectory = getenv("SRS_SLOWCONTROL_DIR");
-  if(commandDirectory==NULL)
-    sprintf(commandDirectory,".");
-  
-  if(enable)
-    {
-      sprintf(command,"source %s/sruConfigFEC10012.sh",commandDirectory);
-      system(command);
-    }
-
-  sprintf(command,"source %s/%s.sh",commandDirectory,ToDo[enable]);  
-  system(command);
-}
 
 int
 srsConnect(int *sockfd) /* formally createAndBinSocket */
@@ -250,50 +228,304 @@ srsSetDebugMode(int enable)
     srsDebugMode=0;
 }
 
+
+int
+srsReadList(char *ip, int port, 
+	    unsigned int sub_addr, unsigned int *list, int nlist,
+	    unsigned int *data, int maxwords)
+{
+  int maxregs=0;
+  int iword=0, nwords=0, wCnt=0;
+  unsigned int *read_command;
+
+  switch(port)
+    {
+    case 6007:
+      maxregs = 16;
+      break;
+
+    case 6039:
+      maxregs = 32;
+      break;
+
+    case 6519:
+      maxregs = 7;
+      break;
+      
+    default:
+      printf("%s: Reading All registers from port %d not supported\n",
+	     __FUNCTION__,port);
+      maxregs=0;
+    }
+
+  read_command = (unsigned int *)malloc((maxregs+4)*sizeof(unsigned int));
+  if(read_command==NULL)
+    {
+      perror("malloc");
+      printf("%s: Unable to allocate memory\n",__FUNCTION__);
+      return -1;
+    }
+
+  read_command[wCnt++] = bswap_32(0x80000000);  /* Request ID */
+  read_command[wCnt++] = bswap_32(sub_addr);    /* SubAddress */
+  read_command[wCnt++] = bswap_32(0xBBAAffff);  /* Read List */
+  read_command[wCnt++] = bswap_32(0x11223344);  /* CMD INFO (dont care) */
+  for(iword=0; iword<nlist; iword++) /* Add in dummy fields */
+    {
+      read_command[wCnt++] = bswap_32(list[iword]);
+    }
+
+  nwords = srsSlowControl(ip, port, 
+			  read_command, wCnt,
+			  data);
+
+  if(read_command)
+    free(read_command);
+
+  return nwords;
+}
+
+int
+srsReadBurst(char *ip, int port, 
+	     unsigned int sub_addr, unsigned int first_addr, int nregs,
+	     unsigned int *data, int maxwords)
+{
+  int maxregs=0;
+  int iword=0, nwords=0, wCnt=0;
+  unsigned int *read_command;
+
+  switch(port)
+    {
+    case 6007:
+      maxregs = 16;
+      break;
+
+    case 6039:
+      maxregs = 32;
+      break;
+
+    case 6519:
+      maxregs = 7;
+      break;
+      
+    default:
+      printf("%s: Reading All registers from port %d not supported\n",
+	     __FUNCTION__,port);
+      nregs=0;
+    }
+
+  read_command = (unsigned int *)malloc((nregs+3)*sizeof(unsigned int));
+  if(read_command==NULL)
+    {
+      perror("malloc");
+      printf("%s: Unable to allocate memory\n",__FUNCTION__);
+      return -1;
+    }
+
+  read_command[wCnt++] = bswap_32(0x80000000);  /* Request ID */
+  read_command[wCnt++] = bswap_32(sub_addr);    /* SubAddress */
+  read_command[wCnt++] = bswap_32(0xBBBBffff);  /* Read Burst */
+  read_command[wCnt++] = bswap_32(first_addr);  /* CMD INFO (first address to read) */
+  for(iword=0; iword<nregs-1; iword++) /* Add in dummy fields */
+    {
+      read_command[wCnt++] = bswap_32(first_addr+iword+1);
+    }
+
+  nwords = srsSlowControl(ip, port, 
+			  read_command, wCnt,
+			  data);
+
+  if(read_command)
+    free(read_command);
+
+  return nwords;
+}
+
+int
+srsWriteBurst(char *ip, int port, 
+	      unsigned int sub_addr, unsigned int first_addr, int nregs,
+	      unsigned int *wdata, int maxwords)
+{
+  int maxregs=0;
+  int iword=0, nwords=0, wCnt=0;
+  unsigned int *write_command;
+
+  switch(port)
+    {
+    case 6007:
+      maxregs = 16;
+      break;
+
+    case 6039:
+      maxregs = 32;
+      break;
+
+    case 6519:
+      maxregs = 7;
+      break;
+      
+    default:
+      printf("%s: Reading All registers from port %d not supported\n",
+	     __FUNCTION__,port);
+      nregs=0;
+    }
+
+  write_command = (unsigned int *)malloc((nregs+3)*sizeof(unsigned int));
+  if(write_command==NULL)
+    {
+      perror("malloc");
+      printf("%s: Unable to allocate memory\n",__FUNCTION__);
+      return -1;
+    }
+
+  write_command[wCnt++] = bswap_32(0x80000000);  /* Request ID */
+  write_command[wCnt++] = bswap_32(sub_addr);    /* SubAddress */
+  write_command[wCnt++] = bswap_32(0xAABBffff);  /* Write Burst */
+  write_command[wCnt++] = bswap_32(first_addr);  /* CMD INFO (first address to write) */
+
+  for(iword=0; iword<(nregs-1); iword++) /* Add in dummy fields */
+    {
+      write_command[wCnt++] = bswap_32(wdata[iword]);
+    }
+
+  nwords = srsSlowControl(ip, port, 
+			  write_command, wCnt,
+			  NULL);
+
+  if(write_command)
+    free(write_command);
+
+  return nwords;
+}
+
+int
+srsWritePairs(char *ip, int port, 
+	      unsigned int sub_addr, unsigned int *addr, int nregs,
+	      unsigned int *wdata, int maxwords)
+{
+  int maxregs=0;
+  int iword=0, nwords=0, wCnt=0;
+  unsigned int *write_command;
+
+  switch(port)
+    {
+    case 6007:
+      maxregs = 16;
+      break;
+
+    case 6039:
+      maxregs = 32;
+      break;
+
+    case 6519:
+      maxregs = 7;
+      break;
+      
+    default:
+      printf("%s: Reading All registers from port %d not supported\n",
+	     __FUNCTION__,port);
+      nregs=0;
+    }
+
+  write_command = (unsigned int *)malloc((nregs+4)*sizeof(unsigned int));
+  if(write_command==NULL)
+    {
+      perror("malloc");
+      printf("%s: Unable to allocate memory\n",__FUNCTION__);
+      return -1;
+    }
+
+  write_command[wCnt++] = bswap_32(0x80000000);  /* Request ID */
+  write_command[wCnt++] = bswap_32(sub_addr);    /* SubAddress */
+  write_command[wCnt++] = bswap_32(0xAAAAffff);  /* Write Pairs */
+  write_command[wCnt++] = bswap_32(0x11223344);  /* CMD INFO (dont care) */
+  for(iword=0; iword<nregs-1; iword++) /* Add in dummy fields */
+    {
+      write_command[wCnt++] = bswap_32(addr[iword]);
+      write_command[wCnt++] = bswap_32(wdata[iword]);
+    }
+
+  nwords = srsSlowControl(ip, port, 
+			  write_command, wCnt,
+			  NULL);
+
+  if(write_command)
+    free(write_command);
+
+  return nwords;
+}
+
 int
 srsExecConfigFile(char *filename)
 {
   char ip[100];
   int port = 0;
-  unsigned int buf[50];
-  int iword, nwords=0;
+  unsigned int *buf;
+  int nwords=0;
 
-  printf("%s: Executing commands from \"%s\"\n",
-	 __FUNCTION__,filename);
+  buf = (unsigned int *)malloc(50*sizeof(unsigned int));
 
-  nwords = srsReadFile(filename, (char *)&ip, (int *)&port,
-		       (unsigned int *)&buf);
+  nwords = srsReadFile(filename, (char *)&ip, (int *)&port, buf);
+
+  srsSlowControl(ip, port,
+		 buf, nwords,
+		 NULL);
+
+  free(buf);
+  return 0;
+}
+
+static int
+srsSlowControl(char *ip, int port, 
+	       unsigned int *req_fields, int nfields,
+	       unsigned int *ret_data)
+{
+  unsigned int *response;
+  int iword, nwords=0, maxwords=0;
+
+  maxwords      = (2*(nfields-4))+4;
+  response      = (unsigned int *)malloc(maxwords*sizeof(unsigned int));
 
   if(srsDebugMode)
     {
       printf("%s: Writing to port %d  ip %s\n",
 	     __FUNCTION__,port, ip);
-      for(iword=0; iword<nwords; iword++)
-	printf("%2d: 0x%08x\n",iword,bswap_32(buf[iword]));
+      for(iword=0; iword<nfields; iword++)
+	printf("%2d: 0x%08x\n",iword,bswap_32(req_fields[iword]));
     }
+
 
   SRSLOCK;
   if(srsPrepareSocket(ip, port)<0)
     {
       printf("%s: Unable to open/prepare socket\n",__FUNCTION__);
       srsCloseSocket();
+
+      if(response)
+	free(response);
       SRSUNLOCK;
       return -1;
     }
 
-  if(srsSendData(buf,nwords)<0)
+  if(srsSendData(req_fields,nfields)<0)
     {
       printf("%s: Unable to send data\n",__FUNCTION__);
       srsCloseSocket();
+
+      if(response)
+	free(response);
       SRSUNLOCK;
       return -1;
     }
   
-  nwords = srsReceiveData((unsigned int *)&buf, 50);
+  nwords = srsReceiveData(response, maxwords);
   if(nwords<0)
     {
       printf("%s: Failed to receive data\n",__FUNCTION__);
       srsCloseSocket();
+
+      if(response)
+	free(response);
       SRSUNLOCK;
       return -1;
     }
@@ -302,20 +534,49 @@ srsExecConfigFile(char *filename)
     {
       printf("%s: Response:\n",__FUNCTION__);
       for(iword=0; iword<nwords; iword++)
-	printf("%2d: 0x%08x\n",iword,bswap_32(buf[iword]));
+	printf("%2d: 0x%08x\n",iword,bswap_32(response[iword]));
+
+      printf("\n");
     }
 
   srsCloseSocket();
+
+  nwords = srsParseResponse(response, ret_data, nwords);
   SRSUNLOCK;
 
-  return 0;
+  if(response)
+    free(response);
+
+  return nwords;
 }
 
-void 
-srsTest()
+static int
+srsParseResponse(unsigned int *ibuf, unsigned int *obuf, int nwords)
 {
-  srsExecConfigFile("../SRSconfig/slow_control/read.txt");
+  int iword=0, dCnt=0, nerr=0;
+
+  /* First word */
+  if((bswap_32(ibuf[0]) & (1<<31)) != 0)
+    {
+      printf("%s: 0x%08x: Invalid Reply Identifier\n",
+	     __FUNCTION__,ibuf[0]);
+    }
+
+  for(iword=4; iword<nwords; iword+=2)
+    {
+      if(bswap_32(ibuf[iword])!=0) /* Error condition */
+	nerr++;
+
+      if(obuf)
+	obuf[dCnt++] = bswap_32(ibuf[iword+1]);
+    }
+  
+  if(nerr>0)
+    printf("%s: %d Error(s) found in reply\n",__FUNCTION__,nerr);
+
+  return dCnt;
 }
+
 
 /* UDP Send/Receive commands */
 int g_sockfd;
@@ -466,7 +727,6 @@ static int
 srsReceiveData(unsigned int *buffer, int nwords) 
 {
   int n, try=0;
-  unsigned int *ptr;
   int l_errno;
   int dCnt;
   socklen_t g_len;
@@ -479,7 +739,7 @@ srsReceiveData(unsigned int *buffer, int nwords)
       try++;
       l_errno = errno;
       perror("recvfrom");
-      n = recvfrom(g_sockfd,(void *)ptr,nwords*sizeof(unsigned int),
+      n = recvfrom(g_sockfd,(void *)buffer,nwords*sizeof(unsigned int),
 		   0,(struct sockaddr *) &g_cliaddr,&g_len);
     }
   dCnt = n>>2;
@@ -550,7 +810,7 @@ srsReadFile(char *path, char *ip, int *port, unsigned int *obuffer)
   FILE *pFile;
   int *buf;
   char buffer[100];
-  int nwords;
+  int nwords=0;
   
   buf = (int*)obuffer;
   memset(buffer,0,100);
