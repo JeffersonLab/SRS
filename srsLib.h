@@ -10,7 +10,6 @@
 
 int   srsConnect(int *sockfd);
 int   srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blocklevel);
-void  srsSetDebugMode(int enable);
 
 int   srsSetDAQIP(char *ip, char *daq_ip);
 int   srsSetDTCC(char *ip, int dataOverEth, int noFlowCtrl, int paddingType,
@@ -28,6 +27,15 @@ int   srsSetEventBuild(char *ip,
 int   srsTrigEnable(char *ip);
 int   srsTrigDisable(char *ip);
 int   srsAPVReset(char *ip);
+int   srsAPVConfig(char *ip, int channel_mask, int device_mask,
+		   int mode, int latency, int mux_gain, 
+		   int ipre, int ipcasc, int ipsf, 
+		   int isha, int issf, int ipsp, 
+		   int imuxin, int ical, int vsps,
+		   int vfs, int vfp, int cdrv, int csel);
+int   srsPLLConfig(char *ip, int channel_mask,
+		   int fine_delay, int trg_delay);
+void  srsSetDebugMode(int enable);
 
 int   srsReadList(char *ip, int port, 
 		  unsigned int sub_addr, unsigned int *list, int nlist,

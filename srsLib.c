@@ -429,6 +429,77 @@ srsAPVReset(char *ip)
   return stat;
 }
 
+int
+srsAPVConfig(char *ip, int channel_mask, int device_mask,
+	     int mode, int latency, int mux_gain, 
+	     int ipre, int ipcasc, int ipsf, 
+	     int isha, int issf, int ipsp, 
+	     int imuxin, int ical, int vsps,
+	     int vfs, int vfp, int cdrv, int csel)
+{
+  int stat=0;
+  const int nregs=0x1D;
+  unsigned int regs[nregs];
+  unsigned int data[nregs];
+  unsigned int subaddr=0;
+
+  if((device_mask<1) || (device_mask>3))
+    {
+      printf("%s: ERROR: Invalid device_mask (%d)\n",
+	     __FUNCTION__,device_mask);
+      return -1;
+    }
+
+  memset(data,0,sizeof(data));
+  memset(regs,0,sizeof(regs));
+
+  subaddr = ((channel_mask&0xff)<<8) | (device_mask&0x3);
+
+  regs[0]  = 0x1;  data[0]  = mode;
+  regs[1]  = 0x2;  data[1]  = latency;
+  regs[2]  = 0x3;  data[2]  = mux_gain;
+  regs[3]  = 0x10; data[3]  = ipre;
+  regs[4]  = 0x11; data[4]  = ipcasc;
+  regs[5]  = 0x12; data[5]  = ipsf;
+  regs[6]  = 0x13; data[6]  = isha;
+  regs[7]  = 0x14; data[7]  = issf;
+  regs[8]  = 0x15; data[8]  = ipsp;
+  regs[9]  = 0x16; data[9]  = imuxin;
+  regs[10] = 0x18; data[10] = ical;
+  regs[11] = 0x19; data[11] = vsps;
+  regs[12] = 0x1A; data[12] = vfs;
+  regs[13] = 0x1B; data[13] = vfp;
+  regs[14] = 0x1C; data[14] = cdrv;
+  regs[15] = 0x1D; data[15] = csel;
+
+  stat = srsWritePairs(ip, 6263, subaddr, regs, nregs, data, nregs);
+
+  return stat;
+}
+
+int
+srsPLLConfig(char *ip, int channel_mask,
+	     int fine_delay, int trg_delay)
+{
+  int stat=0;
+  const int nregs=0x2;
+  unsigned int regs[nregs];
+  unsigned int data[nregs];
+  unsigned int subaddr=0;
+
+  memset(data,0,sizeof(data));
+  memset(regs,0,sizeof(regs));
+
+  subaddr = ((channel_mask&0xff)<<8);
+
+  regs[0]  = 0x1;  data[0]  = fine_delay;
+  regs[1]  = 0x3;  data[1]  = trg_delay;
+
+  stat = srsWritePairs(ip, 6263, subaddr, regs, nregs, data, nregs);
+
+  return stat;
+}
+
 void
 srsSetDebugMode(int enable)
 {
