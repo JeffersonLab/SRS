@@ -43,14 +43,21 @@ main(int argc, char *argv[])
   /* srsSlowControl(0); */
 
   srsSetDebugMode(1);
-  stat = srsReadList("10.0.1.2",6007,
-  	      0x0, list, 3,
-  	     buf,32);
-  int i;
-  for(i=0; i<stat; i++)
-    printf("%2d: 0x%08x\n",i,buf[i]);
 
   srsExecConfigFile("../SRSconfig/slow_control/read.txt");
+
+  srsSetDAQIP("10.0.1.2","10.0.0.3");
+  srsSetDTCC("10.0.1.2",
+	     1, // dataOverEth
+	     0, // noFlowCtrl
+	     2, // paddingType 
+	     0, // trgIDEnable
+	     0, // trgIDAll
+	     4, // trailerCnt
+	     0xaa, // paddingByte
+	     0xdd);// trailerByte
+
+  srsConfigADC("10.0.1.2", 0xff, 0, 0, 0, 0, 0, 0xff);
 
  CLOSE:
   closeup();

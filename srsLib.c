@@ -218,6 +218,287 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
   return nwords+1;
 }
 
+int
+srsSetDAQIP(char *ip, char *daq_ip)
+{
+  int stat=0;
+  struct in_addr sa;
+  const int nregs=1;
+  unsigned int reg[nregs];
+  unsigned int data[nregs];
+  
+  if(inet_pton(AF_INET, daq_ip, &sa)!=1)
+    {
+      perror("inet_pton");
+      return -1;
+    }
+
+  reg[0]  = 0xa;
+  data[0] = bswap_32(sa.s_addr);
+
+  if(srsDebugMode)
+    printf("%s: data = 0x%08x\n",__FUNCTION__,data[0]);
+
+  stat = srsWritePairs(ip, 6007, 0, reg, nregs, data,nregs);
+
+  return stat;
+}
+
+int
+srsSetDTCC(char *ip, int dataOverEth, int noFlowCtrl, int paddingType,
+	   int trgIDEnable, int trgIDAll, int trailerCnt, int paddingByte, int trailerByte)
+{
+  int stat=0;
+  const int nregs=1;
+  unsigned int reg[nregs];
+  unsigned int data[nregs];
+
+  dataOverEth = dataOverEth?1:0;
+  noFlowCtrl  = noFlowCtrl?1:0;
+  trgIDEnable = trgIDEnable?1:0;
+  trgIDAll    = trgIDAll?1:0;
+  
+  if((paddingType<0) || (paddingType>2))
+    {
+      printf("%s: Invalid paddingType (%d)\n",
+	     __FUNCTION__,paddingType);
+      return -1;
+    }
+  
+  if((trailerCnt<0) || (trailerCnt>0xf))
+    {
+      printf("%s: Invalid trailerCnt (%d)\n",
+	     __FUNCTION__,trailerCnt);
+      return -1;
+    }
+
+  if((paddingByte<0) || (paddingByte>0xff))
+    {
+      printf("%s: Invalid paddingByte (%d)\n",
+	     __FUNCTION__,paddingByte);
+      return -1;
+    }
+
+  if((trailerByte<0) || (trailerByte>0xff))
+    {
+      printf("%s: Invalid trailerByte (%d)\n",
+	     __FUNCTION__,trailerByte);
+      return -1;
+    }
+
+  reg[0]  = 0xb;
+  data[0] = dataOverEth | (noFlowCtrl<<1) | (paddingType<<8) |
+    (trgIDEnable<<10) | (trgIDAll<<11) | (trailerCnt<<12) |
+    (paddingByte<<16) | (trailerByte<<24) ;
+		     
+  if(srsDebugMode)
+    printf("%s: data = 0x%08x\n",__FUNCTION__,data[0]);
+
+  stat = srsWritePairs(ip, 6007, 0, reg, nregs, data,nregs);
+
+  return stat;
+}
+
+int
+srsConfigADC(char *ip,
+	     int reset_mask, int ch0_down_mask, int ch1_down_mask,
+	     int eq_level0_mask, int eq_level1_mask, int trgout_enable_mask,
+	     int bclk_enable_mask)
+{
+  int stat;
+  const int nregs=7;
+  unsigned int data[nregs];
+
+  memset(data,0,sizeof(data));
+
+  data[0] = reset_mask;
+  data[1] = ch0_down_mask;
+  data[2] = ch1_down_mask;
+  data[3] = eq_level0_mask;
+  data[4] = eq_level1_mask;
+  data[5] = trgout_enable_mask;
+  data[6] = bclk_enable_mask;
+
+  stat = srsWriteBurst(ip, 6519, 
+		       0, 0, nregs,
+		       data, nregs);
+    
+  return stat;
+}
+
+int
+srsSetApvTriggerControl(char *ip,
+			int mode, int trgburst, int freq,
+			int trgdelay, int tpdelay, int rosync)
+{
+  int stat=0;
+  const int nregs=6;
+  unsigned int data[nregs];
+
+  memset(data,0,sizeof(data));
+
+  data[0] = mode;
+  data[1] = trgburst;
+  data[2] = freq;
+  data[3] = trgdelay;
+  data[4] = tpdelay;
+  data[5] = rosync;
+
+  stat = srsWriteBurst(ip, 6039, 
+		       0, 0, nregs,
+		       data, nregs);
+
+  return stat;
+}
+
+int
+srsSetEventBuild(char *ip,
+		 int chEnable, int dataLength, int mode, 
+		 int eventInfoType, unsigned int eventInfoData)
+{
+  int stat=0;
+  const int nregs=5;
+  unsigned int data[nregs];
+
+  memset(data,0,sizeof(data));
+
+  data[0] = chEnable;
+  data[1] = dataLength;
+  data[2] = mode;
+  data[3] = eventInfoType;
+  data[4] = eventInfoData;
+
+  stat = srsWriteBurst(ip, 6039, 
+		       0, 8, nregs,
+		       data, nregs);
+
+  return stat;
+}
+
+int
+srsTrigEnable(char *ip)
+{
+  int stat=0;
+  const int nregs=1;
+  unsigned int data[nregs];
+
+  memset(data,0,sizeof(data));
+
+  data[0] = 1;
+
+  stat = srsWriteBurst(ip, 6039, 
+		       0, 0xf, nregs,
+		       data, nregs);
+
+  return stat;
+}
+
+int
+srsTrigDisable(char *ip)
+{
+  int stat=0;
+  const int nregs=1;
+  unsigned int data[nregs];
+
+  memset(data,0,sizeof(data));
+
+  data[0] = 0;
+
+  stat = srsWriteBurst(ip, 6039, 
+		       0, 0xf, nregs,
+		       data, nregs);
+
+  return stat;
+}
+
+int
+srsAPVReset(char *ip)
+{
+  int stat=0;
+  const int nregs=1;
+  unsigned int data[nregs];
+
+  memset(data,0,sizeof(data));
+
+  data[0] = 1;
+
+  stat = srsWriteBurst(ip, 6039, 
+		       0, 0xffffffff, nregs,
+		       data, nregs);
+
+  return stat;
+}
+
+int
+srsAPVConfig(char *ip, int channel_mask, int device_mask,
+	     int mode, int latency, int mux_gain, 
+	     int ipre, int ipcasc, int ipsf, 
+	     int isha, int issf, int ipsp, 
+	     int imuxin, int ical, int vsps,
+	     int vfs, int vfp, int cdrv, int csel)
+{
+  int stat=0;
+  const int nregs=0x1D;
+  unsigned int regs[nregs];
+  unsigned int data[nregs];
+  unsigned int subaddr=0;
+
+  if((device_mask<1) || (device_mask>3))
+    {
+      printf("%s: ERROR: Invalid device_mask (%d)\n",
+	     __FUNCTION__,device_mask);
+      return -1;
+    }
+
+  memset(data,0,sizeof(data));
+  memset(regs,0,sizeof(regs));
+
+  subaddr = ((channel_mask&0xff)<<8) | (device_mask&0x3);
+
+  regs[0]  = 0x1;  data[0]  = mode;
+  regs[1]  = 0x2;  data[1]  = latency;
+  regs[2]  = 0x3;  data[2]  = mux_gain;
+  regs[3]  = 0x10; data[3]  = ipre;
+  regs[4]  = 0x11; data[4]  = ipcasc;
+  regs[5]  = 0x12; data[5]  = ipsf;
+  regs[6]  = 0x13; data[6]  = isha;
+  regs[7]  = 0x14; data[7]  = issf;
+  regs[8]  = 0x15; data[8]  = ipsp;
+  regs[9]  = 0x16; data[9]  = imuxin;
+  regs[10] = 0x18; data[10] = ical;
+  regs[11] = 0x19; data[11] = vsps;
+  regs[12] = 0x1A; data[12] = vfs;
+  regs[13] = 0x1B; data[13] = vfp;
+  regs[14] = 0x1C; data[14] = cdrv;
+  regs[15] = 0x1D; data[15] = csel;
+
+  stat = srsWritePairs(ip, 6263, subaddr, regs, nregs, data, nregs);
+
+  return stat;
+}
+
+int
+srsPLLConfig(char *ip, int channel_mask,
+	     int fine_delay, int trg_delay)
+{
+  int stat=0;
+  const int nregs=0x2;
+  unsigned int regs[nregs];
+  unsigned int data[nregs];
+  unsigned int subaddr=0;
+
+  memset(data,0,sizeof(data));
+  memset(regs,0,sizeof(regs));
+
+  subaddr = ((channel_mask&0xff)<<8);
+
+  regs[0]  = 0x1;  data[0]  = fine_delay;
+  regs[1]  = 0x3;  data[1]  = trg_delay;
+
+  stat = srsWritePairs(ip, 6263, subaddr, regs, nregs, data, nregs);
+
+  return stat;
+}
 
 void
 srsSetDebugMode(int enable)
@@ -370,7 +651,7 @@ srsWriteBurst(char *ip, int port,
       nregs=0;
     }
 
-  write_command = (unsigned int *)malloc((nregs+3)*sizeof(unsigned int));
+  write_command = (unsigned int *)malloc((nregs+4)*sizeof(unsigned int));
   if(write_command==NULL)
     {
       perror("malloc");
@@ -383,7 +664,7 @@ srsWriteBurst(char *ip, int port,
   write_command[wCnt++] = bswap_32(0xAABBffff);  /* Write Burst */
   write_command[wCnt++] = bswap_32(first_addr);  /* CMD INFO (first address to write) */
 
-  for(iword=0; iword<(nregs-1); iword++) /* Add in dummy fields */
+  for(iword=0; iword<nregs; iword++) /* Add in dummy fields */
     {
       write_command[wCnt++] = bswap_32(wdata[iword]);
     }
@@ -439,7 +720,7 @@ srsWritePairs(char *ip, int port,
   write_command[wCnt++] = bswap_32(sub_addr);    /* SubAddress */
   write_command[wCnt++] = bswap_32(0xAAAAffff);  /* Write Pairs */
   write_command[wCnt++] = bswap_32(0x11223344);  /* CMD INFO (dont care) */
-  for(iword=0; iword<nregs-1; iword++) /* Add in dummy fields */
+  for(iword=0; iword<nregs; iword++) /* Add in dummy fields */
     {
       write_command[wCnt++] = bswap_32(addr[iword]);
       write_command[wCnt++] = bswap_32(wdata[iword]);
@@ -627,7 +908,6 @@ sock_ntop_host(const struct sockaddr *sa, socklen_t salen)
   }
   return (NULL);
 }
-
 
 //********************** create a socket ******************************************
 static int
