@@ -126,31 +126,164 @@ srsConnect(int *sockfd) /* formally createAndBinSocket */
   return 0;
 }
 
-#define SIZE 65504
+int
+srsStatus(char *ip, int pflag)
+{
+  const int nsys = 0x10; 
+  const int napvapp = 0x10; 
+  const int napv = 0x1E; 
+  const int npll = 0x4; 
+  const int nadccard = 0x7; 
+  unsigned int sys[nsys];
+  unsigned int apvapp[napvapp];
+  unsigned int apv[napv];
+  unsigned int pll[npll];
+  unsigned int adccard[nadccard];
 
+  memset(sys,0,sizeof(sys));
+  memset(apvapp,0,sizeof(apvapp));
+  memset(apv,0,sizeof(apv));
+  memset(pll,0,sizeof(pll));
+  memset(adccard,0,sizeof(adccard));
+
+  if(srsReadBurst(ip, SRS_SYS_PORT, 0, 0, nsys, sys, nsys)<0)
+    {
+      printf("%s: ERROR reading SYS port\n",__FUNCTION__);
+      return -1;
+    }
+  if(srsReadBurst(ip, SRS_APVAPP_PORT, 0, 0, napvapp, apvapp, napvapp)<0)
+    {
+      printf("%s: ERROR reading APVAPP port\n",__FUNCTION__);
+      return -1;
+    }
+  if(srsReadBurst(ip, SRS_APV_PORT, SRS_APV_ALLAPV_MASK, 0, napv, apv, napv)<0)
+    {
+      printf("%s: ERROR reading APV port\n",__FUNCTION__);
+      return -1;
+    }
+  if(srsReadBurst(ip, SRS_APV_PORT, SRS_APV_ALLPLL_MASK, 0, npll, pll, npll)<0)
+    {
+      printf("%s: ERROR reading APV-PLL port\n",__FUNCTION__);
+      return -1;
+    }
+  if(srsReadBurst(ip, SRS_ADCCARD_PORT, 0, 0, nadccard, adccard, nadccard)<0)
+    {
+      printf("%s: ERROR reading ADCCARD port\n",__FUNCTION__);
+      return -1;
+    }
+
+  printf("\n");
+  printf("STATUS for SRS device at %s \n",ip);
+  printf("--------------------------------------------------------------------------------\n");
+  printf("                              System Summary\n\n");
+
+  printf(" Firmware Version      0x%04x\n",sys[0]&0xffff);
+  printf(" FEC IP                %d.%d.%d.%d\n",
+	 (sys[3]&0xff000000)>>24, (sys[3]&0xff0000)>>16, 
+	 (sys[3]&0xff00)>>8, (sys[3]&0xff)>>0);
+  printf(" DAQ IP:PORT           %d.%d.%d.%d:%d\n",
+	 (sys[0xa]&0xff000000)>>24, (sys[0xa]&0xff0000)>>16, 
+	 (sys[0xa]&0xff00)>>8, (sys[0xa]&0xff)>>0,
+	 sys[4]&0xffff);
+  printf(" Clock Selection       0x%02x\n",(sys[0xc]&0xff));
+  printf("   Status              0x%08x\n",sys[0xd]);
+  printf("\n");
+  printf(" DTC Config\n");
+  printf("   Data over ETH       %s\t",(sys[0xb]&(1<<0))?"Enabled":"Disabled");
+  printf("   Flow Control        %s\n",(sys[0xb]&(1<<1))?"Disabled":"Enabled");
+  printf("   Padding Type        %d\t",((sys[0xb]&0x300)>>8));
+  printf("   Data Channel TrgID  %s\n",(sys[0xb]&(1<<10))?"Enabled":"Disabled");
+  printf("   Data Frame TrgID    %s\t",(sys[0xb]&(1<<11))?"Enabled":"Disabled");
+  printf("   Trailer word count  %d\n",(sys[0xb]&0xf000)>>12);
+  printf("   Padding Byte        0x%02x\t",(sys[0xb]&0xff0000)>>16);
+  printf("   Trailer Byte        0x%02x\n",(sys[0xb]&0xff000000)>>24);
+  
+  printf("\n");
+  printf("--------------------------------------------------------------------------------\n");
+  printf("                         APV Application Summary\n\n");
+  printf(" APV Trigger Control\n");
+  printf("   Mode                %d\t",apvapp[0]&0xff);
+  printf("   TrgBurst            %d\n",apvapp[1]&0xff);
+  printf("   Trigger Seq Period  %d\t",apvapp[2]&0xffff);
+  printf("   Trigger Delay       %d\n",apvapp[3]&0xffff);
+  printf("   Test Pulse Delay    %d\t",apvapp[4]&0xffff);
+  printf("   RO Sync             %d\n",apvapp[5]&0xffff);
+  printf("   Status              0x%06x\n",apvapp[7]&0xffffff);
+  printf("\n");
+  
+  printf(" Event Build\n");
+  printf("   Ch Enable Mask      0x%04x\t",apvapp[8]&0xffff);
+  printf("   Capture Window      %d\n",apvapp[9]&0xffff);
+  printf("   Mode                %d\t",apvapp[0xa]&0xff);
+  printf("   Data Format         %d\n",apvapp[0xb]&0xff);
+  printf("   Event Info Data     0x%04x\n",apvapp[0xc]&0xffffffff);
+  printf("\n");
+  printf(" Readout is %s (0x%x)\n",(apvapp[0xf]&0x1)?"Enabled":"Disabled", apvapp[0xf]);
+
+  printf("\n");
+  printf("--------------------------------------------------------------------------------\n");
+  printf("                             APV Summary (ALL APVs)\n\n");
+  printf(" Error Status          0x%02x\t",apv[0]&0xff);
+  printf(" Mode                  0x%02x\n",apv[1]&0xff);
+  printf(" Latency               0x%02x\t",apv[2]&0xff);
+  printf(" Mux Gain              0x%02x\n",apv[3]&0xff);
+  printf(" IPRE                  0x%02x\t",apv[0x10]&0xff);
+  printf(" IPCASC                0x%02x\n",apv[0x11]&0xff);
+  printf(" IPSF                  0x%02x\t",apv[0x12]&0xff);
+  printf(" ISHA                  0x%02x\n",apv[0x13]&0xff);
+  printf(" ISSF                  0x%02x\t",apv[0x14]&0xff);
+  printf(" IPSP                  0x%02x\n",apv[0x15]&0xff);
+  printf(" IMUXIN                0x%02x\t",apv[0x16]&0xff);
+  printf(" ICAL                  0x%02x\n",apv[0x18]&0xff);
+  printf(" VPSP                  0x%02x\t",apv[0x19]&0xff);
+  printf(" VFS                   0x%02x\n",apv[0x1a]&0xff);
+  printf(" VFP                   0x%02x\t",apv[0x1b]&0xff);
+  printf(" CDRV                  0x%02x\n",apv[0x1c]&0xff);
+  printf(" CSEL                  0x%02x\n",apv[0x1d]&0xff);
+  
+  printf("\n");
+  printf("--------------------------------------------------------------------------------\n");
+  printf("                           APV-PLL Summary (ALL PLLs)\n\n");
+  printf(" Fine Delay            0x%02x\t",pll[1]&0xff);
+  printf(" Trigger Delay         0x%02x\n",pll[3]&0xff);
+
+  printf("\n");
+  printf("--------------------------------------------------------------------------------\n");
+  printf("                            ADC C-Card Summary\n\n");
+  printf(" Hybrid Reset Mask     0x%02x\t",adccard[0]&0xff);
+  printf(" PowerDown Ch0 Mask    0x%02x\n",adccard[1]&0xff);
+  printf(" PowerDown Ch1 Mask    0x%02x\t",adccard[2]&0xff);
+  printf(" EQ Level 0 Mask       0x%02x\n",adccard[3]&0xff);
+  printf(" EQ Level 1 Mask       0x%02x\t",adccard[4]&0xff);
+  printf(" TrgOut Enable Mask    0x%02x\n",adccard[5]&0xff);
+  printf(" BCLK Enable Mask      0x%02x\n",adccard[6]&0xff);
+
+  printf("\n");
+  printf("--------------------------------------------------------------------------------\n");
+  printf("\n\n");
+
+  return 0;
+}
 
 int 
 srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blocklevel)
 {
-  int channelNo=-1, trigNum=0, n; //cli for client?
+  int trigNum=0, n=0;
   struct sockaddr_in cli_addr;  
   socklen_t slen=sizeof(cli_addr);  
   unsigned int *ptr; 
-  int Index=0;  
   unsigned int rawdata=0;
   int nwords=0;
   unsigned long long total=0;
   int l_errno=0;
-  unsigned int *buf;
+  int Index=0;
 
-  buf = malloc(nwrds*sizeof(unsigned int));
-
-  ptr = (unsigned int*)buf; 
+  ptr = (unsigned int*)buf_in; 
 
   while(1)
     {
       if(srsDebugMode)
-	printf("%s: call recvfrom  buf = 0x%lx\n",__FUNCTION__,(unsigned long)&buf);
+	printf("%s: call recvfrom  buf = 0x%lx\n",__FUNCTION__,(unsigned long)ptr);
 
       before = rdtsc();
       n = recvfrom(sockfd, (void *)ptr, nwrds*sizeof(unsigned int), 
@@ -172,7 +305,7 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
 	      printf("%s: errno = %d  sockfd = %d\n",__FUNCTION__,l_errno,sockfd);
 	      perror("recvfrom");
 	    }
-	  return -1;
+	  return nwords;
 	}
 
       if (n>=4)
@@ -181,41 +314,35 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
 	    printf("Received packet from %s:%d of length %i\n",
 		   inet_ntoa(cli_addr.sin_addr), ntohs(cli_addr.sin_port), n);
 
-	  for ( Index=0;Index<n/4;Index++)
+
+	  /* Save the data at the beginning of the frame */
+	  rawdata = *ptr;
+
+	  /* Bump the pointer and number of words by the return value */
+	  ptr    += n/4;
+	  nwords += n/4;
+	  
+	  if(srsDebugMode)
+	    printf("%d  0x%x\n",nwords,bswap_32(rawdata));
+
+	  /* Check if we've gotten the event-trailer (in its own frame) */
+	  if(rawdata == 0xfafafafa) /* event-trailer frame */
 	    {
-	      rawdata = *ptr++;
-	      nwords++;
-	      if(srsDebugMode)
-		printf("%d  0x%x\n",Index,rawdata);
-
-	      if(rawdata == 0xfafafafa) /* event-trailer frame */
-		continue; 
-	      else
-		{
-		  if (Index == 1)
-		    {
-		      unsigned int dh1 = ntohl(rawdata);
-		      unsigned char c = (dh1 >>24) & 0xff;
-		      c = (dh1 >>16) & 0xff;
-		      c = (dh1 >>8) & 0xff;
-		      unsigned int channel = dh1 & 0xff;
-		      channelNo = (int)channel; 
-		      if(channel==15) 
-			trigNum++; //==0 is valid for the event-trailer frame too.
-		    }
-		}
+	      /* Bump the trigger number */
+	      trigNum++;
+	      if(trigNum==blocklevel) /* Quit... */
+		break;
 	    }
+	  else
+	    continue;
+	  
 	}
-
-      if(trigNum==blocklevel) 
-	break;
-
-
     }
+
 
 /*   printf("%s: total = %lld\n",__FUNCTION__,total); */
 
-  return nwords+1;
+  return nwords;
 }
 
 int
@@ -236,10 +363,7 @@ srsSetDAQIP(char *ip, char *daq_ip)
   reg[0]  = 0xa;
   data[0] = bswap_32(sa.s_addr);
 
-  if(srsDebugMode)
-    printf("%s: data = 0x%08x\n",__FUNCTION__,data[0]);
-
-  stat = srsWritePairs(ip, 6007, 0, reg, nregs, data,nregs);
+  stat = srsWritePairs(ip, SRS_SYS_PORT, 0, reg, nregs, data,nregs);
 
   return stat;
 }
@@ -294,7 +418,7 @@ srsSetDTCC(char *ip, int dataOverEth, int noFlowCtrl, int paddingType,
   if(srsDebugMode)
     printf("%s: data = 0x%08x\n",__FUNCTION__,data[0]);
 
-  stat = srsWritePairs(ip, 6007, 0, reg, nregs, data,nregs);
+  stat = srsWritePairs(ip, SRS_SYS_PORT, 0, reg, nregs, data,nregs);
 
   return stat;
 }
@@ -319,7 +443,7 @@ srsConfigADC(char *ip,
   data[5] = trgout_enable_mask;
   data[6] = bclk_enable_mask;
 
-  stat = srsWriteBurst(ip, 6519, 
+  stat = srsWriteBurst(ip, SRS_ADCCARD_PORT, 
 		       0, 0, nregs,
 		       data, nregs);
     
@@ -344,7 +468,7 @@ srsSetApvTriggerControl(char *ip,
   data[4] = tpdelay;
   data[5] = rosync;
 
-  stat = srsWriteBurst(ip, 6039, 
+  stat = srsWriteBurst(ip, SRS_APVAPP_PORT, 
 		       0, 0, nregs,
 		       data, nregs);
 
@@ -368,7 +492,7 @@ srsSetEventBuild(char *ip,
   data[3] = eventInfoType;
   data[4] = eventInfoData;
 
-  stat = srsWriteBurst(ip, 6039, 
+  stat = srsWriteBurst(ip, SRS_APVAPP_PORT, 
 		       0, 8, nregs,
 		       data, nregs);
 
@@ -386,7 +510,7 @@ srsTrigEnable(char *ip)
 
   data[0] = 1;
 
-  stat = srsWriteBurst(ip, 6039, 
+  stat = srsWriteBurst(ip, SRS_APVAPP_PORT, 
 		       0, 0xf, nregs,
 		       data, nregs);
 
@@ -404,7 +528,7 @@ srsTrigDisable(char *ip)
 
   data[0] = 0;
 
-  stat = srsWriteBurst(ip, 6039, 
+  stat = srsWriteBurst(ip, SRS_APVAPP_PORT, 
 		       0, 0xf, nregs,
 		       data, nregs);
 
@@ -422,7 +546,7 @@ srsAPVReset(char *ip)
 
   data[0] = 1;
 
-  stat = srsWriteBurst(ip, 6039, 
+  stat = srsWriteBurst(ip, SRS_APVAPP_PORT, 
 		       0, 0xffffffff, nregs,
 		       data, nregs);
 
@@ -472,7 +596,7 @@ srsAPVConfig(char *ip, int channel_mask, int device_mask,
   regs[14] = 0x1C; data[14] = cdrv;
   regs[15] = 0x1D; data[15] = csel;
 
-  stat = srsWritePairs(ip, 6263, subaddr, regs, nregs, data, nregs);
+  stat = srsWritePairs(ip, SRS_APV_PORT, subaddr, regs, nregs, data, nregs);
 
   return stat;
 }
@@ -495,7 +619,7 @@ srsPLLConfig(char *ip, int channel_mask,
   regs[0]  = 0x1;  data[0]  = fine_delay;
   regs[1]  = 0x3;  data[1]  = trg_delay;
 
-  stat = srsWritePairs(ip, 6263, subaddr, regs, nregs, data, nregs);
+  stat = srsWritePairs(ip, SRS_APV_PORT, subaddr, regs, nregs, data, nregs);
 
   return stat;
 }
@@ -521,22 +645,20 @@ srsReadList(char *ip, int port,
 
   switch(port)
     {
-    case 6007:
+    case SRS_SYS_PORT:
       maxregs = 16;
       break;
 
-    case 6039:
+    case SRS_APVAPP_PORT:
       maxregs = 32;
       break;
 
-    case 6519:
+    case SRS_ADCCARD_PORT:
       maxregs = 7;
       break;
       
     default:
-      printf("%s: Reading All registers from port %d not supported\n",
-	     __FUNCTION__,port);
-      maxregs=0;
+      maxregs=0xff; // FIXME: should be more reasonable.
     }
 
   read_command = (unsigned int *)malloc((maxregs+4)*sizeof(unsigned int));
@@ -577,22 +699,22 @@ srsReadBurst(char *ip, int port,
 
   switch(port)
     {
-    case 6007:
+    case SRS_SYS_PORT:
       maxregs = 16;
       break;
 
-    case 6039:
+    case SRS_APVAPP_PORT:
       maxregs = 32;
       break;
 
-    case 6519:
+    case SRS_ADCCARD_PORT:
       maxregs = 7;
       break;
       
     default:
-      printf("%s: Reading All registers from port %d not supported\n",
-	     __FUNCTION__,port);
-      nregs=0;
+      /* printf("%s: Reading All registers from port %d not supported\n", */
+      /* 	     __FUNCTION__,port); */
+      maxregs=0xff;
     }
 
   read_command = (unsigned int *)malloc((nregs+3)*sizeof(unsigned int));
@@ -633,22 +755,22 @@ srsWriteBurst(char *ip, int port,
 
   switch(port)
     {
-    case 6007:
+    case SRS_SYS_PORT:
       maxregs = 16;
       break;
 
-    case 6039:
+    case SRS_APVAPP_PORT:
       maxregs = 32;
       break;
 
-    case 6519:
+    case SRS_ADCCARD_PORT:
       maxregs = 7;
       break;
       
     default:
-      printf("%s: Reading All registers from port %d not supported\n",
-	     __FUNCTION__,port);
-      nregs=0;
+      /* printf("%s: Reading All registers from port %d not supported\n", */
+      /* 	     __FUNCTION__,port); */
+      nregs=0xff;
     }
 
   write_command = (unsigned int *)malloc((nregs+4)*sizeof(unsigned int));
@@ -690,22 +812,22 @@ srsWritePairs(char *ip, int port,
 
   switch(port)
     {
-    case 6007:
+    case SRS_SYS_PORT:
       maxregs = 16;
       break;
 
-    case 6039:
+    case SRS_APVAPP_PORT:
       maxregs = 32;
       break;
 
-    case 6519:
+    case SRS_ADCCARD_PORT:
       maxregs = 7;
       break;
       
     default:
-      printf("%s: Reading All registers from port %d not supported\n",
-	     __FUNCTION__,port);
-      nregs=0;
+      /* printf("%s: Reading All registers from port %d not supported\n", */
+      /* 	     __FUNCTION__,port); */
+      nregs=0xff;
     }
 
   write_command = (unsigned int *)malloc((nregs+4)*sizeof(unsigned int));
@@ -827,6 +949,8 @@ srsSlowControl(char *ip, int port,
 
   if(response)
     free(response);
+
+  usleep(100000);
 
   return nwords;
 }
