@@ -17,10 +17,11 @@
 #include <sys/signal.h>
 #include "TIpcieLib.h"
 #include "srsLib.h"
+#include "byteswap.h"
 /* #include "remexLib.h" */
 
-#define BLOCKLEVEL 0x1
-#define PERIOD 32000
+#define BLOCKLEVEL 0x2
+#define PERIOD 16
 #define DO_READOUT
 
 int srsFD;
@@ -56,19 +57,6 @@ main(int argc, char *argv[])
 /*   remexSetCmsgServer("dafarm28"); */
 /*   remexInit(NULL,1); */
   
-  /* TIdata = (unsigned int *)malloc(TI_DATA_SIZE*sizeof(unsigned int)); */
-  /* if(TIdata==NULL) */
-  /*   { */
-  /*     perror("malloc"); */
-  /*     exit(-1); */
-  /*   } */
-  /* SRSdata = (unsigned int *)malloc(SRS_DATA_SIZE*sizeof(unsigned int)); */
-  /* if(SRSdata==NULL) */
-  /*   { */
-  /*     perror("malloc"); */
-  /*     exit(-1); */
-  /*   } */
-
 
 /**********************************************************************
  * TI SETUP
@@ -124,7 +112,6 @@ main(int argc, char *argv[])
 /**********************************************************************
  * SRS Setup
  **********************************************************************/
-  srsSetDebugMode(0);
 
   if(srsConnect((int*)&srsFD)==0) 
     printf("socket created. .. (%d)\n",srsFD);
@@ -132,8 +119,12 @@ main(int argc, char *argv[])
     printf("%s: ERROR: Socket to SRS not open\n",
 	   __FUNCTION__);
 
-  srsSlowControl(1);
-
+  srsExecConfigFile("config/set_IP10012.txt");
+  srsExecConfigFile("config/adc_IP10012.txt");
+  srsExecConfigFile("config/fecCalPulse_IP10012.txt");
+  srsExecConfigFile("config/apv_IP10012.txt");
+  srsExecConfigFile("config/fecAPVreset_IP10012.txt");
+  srsExecConfigFile("config/pll_IP10012.txt");
 
   printf("Hit enter to reset stuff\n");
   getchar();
@@ -151,8 +142,14 @@ main(int argc, char *argv[])
   tipStatus(1);
   tipPCIEStatus(1);
 
+  srsExecConfigFile("config/start_IP10012.txt");
+
+  srsStatus("10.0.1.2",0);
+
+
   printf("Hit enter to start triggers\n");
   getchar();
+
 
   tipIntEnable(0);
   tipStatus(1);
@@ -181,6 +178,9 @@ main(int argc, char *argv[])
 
   tipIntDisconnect();
 
+  srsExecConfigFile("config/stop_IP10012.txt");
+  srsStatus("10.0.1.2",0);
+
  CLOSE:
   closeup();
   exit(0);
@@ -188,17 +188,12 @@ main(int argc, char *argv[])
 
 void closeup()
 {
-  srsSlowControl(0);
+  srsExecConfigFile("config/stop_IP10012.txt");
   sleep(1);
   close(srsFD);
 
   tipClose();
 
-  /* if(SRSdata) */
-  /*   free((void *)SRSdata); */
-
-  /* if(TIdata) */
-  /*   free(TIdata); */
 }
 
 void sig_handler(int signo)
@@ -219,7 +214,7 @@ void
 mytiISR(int arg)
 {
   int dCnt_ti=0, dCnt_srs=0, len=0,idata;
-  int printout = 1000;
+  int printout = 1;
   int dataCheck=0;
   unsigned long long before,after,diff=0;
   int ievent=0;
@@ -242,12 +237,11 @@ mytiISR(int arg)
     }
 
   before = rdtsc();
-  for(ievent=0; ievent<BLOCKLEVEL; ievent++)
+  /* for(ievent=0; ievent<BLOCKLEVEL; ievent++) */
     {
-      dCnt_srs = listenSRS4CODAv0(srsFD, 
-				  (volatile unsigned int *)&SRSdata,
-				  SRS_DATA_SIZE);
-      
+      dCnt_srs = srsReadBlock(srsFD, 
+			      (volatile unsigned int *)&SRSdata,
+			      SRS_DATA_SIZE,BLOCKLEVEL);
       if(dCnt_srs<=0)
 	{
 	  printf("**************************************************\n");
@@ -284,6 +278,7 @@ mytiISR(int arg)
 #ifdef PRINTOUT_SRS
       len = dCnt_srs;
       
+      printf("srs len = %d\n",len);
       for(idata=0;idata<(len);idata++)
 	{
 	  if((idata%4)==0) printf("\n\t");
@@ -298,6 +293,7 @@ mytiISR(int arg)
       getchar();
     }
 
+  getchar();
   tipSoftTrig(1,2,PERIOD,1);
 
 }

@@ -7,9 +7,19 @@
 
 #define MAX_FEC 8
 
+#define SRS_SYS_PORT     6007
+#define SRS_APVAPP_PORT  6039
+#define SRS_APV_PORT     6263
+#define SRS_ADCCARD_PORT 6519
+
+#define SRS_APV_ALLAPV_MASK 0xFF03
+#define SRS_APV_ALLPLL_MASK 0xFF00
+
 
 int   srsConnect(int *sockfd);
 int   srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blocklevel);
+
+int   srsStatus(char *ip, int pflag);
 
 int   srsSetDAQIP(char *ip, char *daq_ip);
 int   srsSetDTCC(char *ip, int dataOverEth, int noFlowCtrl, int paddingType,

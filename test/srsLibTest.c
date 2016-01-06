@@ -44,20 +44,14 @@ main(int argc, char *argv[])
 
   srsSetDebugMode(1);
 
-  srsExecConfigFile("../SRSconfig/slow_control/read.txt");
+  srsExecConfigFile("config/set_IP10012.txt");
+  srsExecConfigFile("config/adc_IP10012.txt");
+  srsExecConfigFile("config/fecCalPulse_IP10012.txt");
+  srsExecConfigFile("config/apv_IP10012.txt");
+  srsExecConfigFile("config/fecAPVreset_IP10012.txt");
+  srsExecConfigFile("config/pll_IP10012.txt");
 
-  srsSetDAQIP("10.0.1.2","10.0.0.3");
-  srsSetDTCC("10.0.1.2",
-	     1, // dataOverEth
-	     0, // noFlowCtrl
-	     2, // paddingType 
-	     0, // trgIDEnable
-	     0, // trgIDAll
-	     4, // trailerCnt
-	     0xaa, // paddingByte
-	     0xdd);// trailerByte
-
-  srsConfigADC("10.0.1.2", 0xff, 0, 0, 0, 0, 0, 0xff);
+  srsStatus("10.0.1.2",0);
 
  CLOSE:
   closeup();
