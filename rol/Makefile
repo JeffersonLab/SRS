@@ -16,7 +16,7 @@ DEBUG=1
 TIPCIE_PATH		= /daqfs/home/moffit/work/TIpcie
 
 # DEFs for compiling CODA readout lists
-CC			= gcc
+CC			= gcc -m32
 CCRL			= ${CODA_BIN}/ccrl
 CODA_INCS		= -I. -I${TIPCIE_PATH} -I${CODA}/common/include
 CODA_LIBDIRS            = -L. -L${TIPCIE_PATH} 
@@ -36,34 +36,28 @@ DEPS			= $(CRLFILES:.crl=.d)
 
 all: $(SOBJS) 
 
-%.c: %.crl
-	@echo
-	@echo "Converting $< to $@"
-	@${CCRL} $<
-
 %.so: %.c
 	@echo
 	@echo "Building $@ from $<"
 	@echo
 	${CC} ${CODA_CFLAGS} -o $@ $<
 
-tipcie_list.so: tipcie_list.c
+%.c: %.crl
 	@echo
-	@echo "Building $@ from $<"
-	@echo
-	${CC} ${CODA_CFLAGS} -o $@ $<
+	@echo "Converting $< to $@"
+	@${CCRL} $<
 
-clean distclean:
-	@rm -f  $(ROLS) $(SOBJS) $(CFILES) *~ 
+clean:
+	@rm -f  $(ROLS) $(SOBJS) $(CFILES) ${DEPS} ${DEPS}.* *~ 
 
 %.d: %.c
 	@echo ""
 	@echo "Building $@ from $<"
 	@set -e; rm -f $@; \
 	$(CC) -MM -shared $(CODA_INCS) $< > $@.$$$$; \
-	sed 's,\($*\)\.so[ :]*,\1 $@ : ,g' < $@.$$$$ > $@; \
+	sed 's,\($*\)\.o[ :]*,\1.so $@ : ,g' < $@.$$$$ > $@; \
 	rm -f $@.$$$$
 
 -include $(DEPS)
 
-.PHONY: all
+.PHONY: all clean
