@@ -14,13 +14,14 @@
 DEBUG=1
 #
 TIPCIE_PATH		= /daqfs/home/moffit/work/TIpcie
+SRS_PATH		= /daqfs/home/moffit/work/SRS
 
 # DEFs for compiling CODA readout lists
 CC			= gcc -m32
 CCRL			= ${CODA_BIN}/ccrl
-CODA_INCS		= -I. -I${TIPCIE_PATH} -I${CODA}/common/include
-CODA_LIBDIRS            = -L. -L${TIPCIE_PATH} 
-CODA_LIBS		= -lTIpcie
+CODA_INCS		= -I. -I${TIPCIE_PATH} -I${SRS_PATH} -I${CODA}/common/include
+CODA_LIBDIRS            = -L. -L${TIPCIE_PATH} -L${SRS_PATH}
+CODA_LIBS		= -lTIpcie -lsrs
 CODA_DEFS		= -DLINUX -DDAYTIME=\""`date`"\"
 CODA_CFLAGS		= -w -fpic -shared ${CODA_INCS} ${CODA_LIBDIRS} \
 			  ${CODA_LIBS} ${CODA_DEFS}

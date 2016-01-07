@@ -12,8 +12,11 @@
 
 TIPCIE_PATH		?= ${HOME}/work/TIpcie
 
-CROSS_COMPILE		=
-CC			= $(CROSS_COMPILE)gcc34
+ifdef BUILD64
+CC			= gcc
+else
+CC			= gcc -m32
+endif
 AR                      = ar
 RANLIB                  = ranlib
 INCS			= -I. -I../ -I${TIPCIE_PATH}

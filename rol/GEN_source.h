@@ -26,6 +26,7 @@ extern int tipIntCount;
 extern void *tsLiveFunc;
 extern int tsLiveCalc;
 
+extern int rocClose();
 
 void
 GEN_int_handler()
@@ -176,6 +177,8 @@ __attribute__((destructor)) void end (void)
   if(ended==0)
     {
       printf("ROC Cleanup\n");
+
+      rocClose();
 
       tsLiveCalc=0;
       tsLiveFunc = NULL;
