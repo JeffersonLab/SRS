@@ -37,10 +37,9 @@ DEPS			= $(CRLFILES:.crl=.d)
 
 all: $(SOBJS) 
 
-%.so: %.c
+%.so : %.c
 	@echo
 	@echo "Building $@ from $<"
-	@echo
 	${CC} ${CODA_CFLAGS} -o $@ $<
 
 %.c: %.crl
@@ -54,11 +53,9 @@ clean:
 %.d: %.c
 	@echo ""
 	@echo "Building $@ from $<"
-	@set -e; rm -f $@; \
-	$(CC) -MM -shared $(CODA_INCS) $< > $@.$$$$; \
-	sed 's,\($*\)\.o[ :]*,\1.so $@ : ,g' < $@.$$$$ > $@; \
-	rm -f $@.$$$$
+	@$(CC) -MM -MT "$(<:.c=.so) $@" -MD -shared $(CODA_INCS) $<
 
 -include $(DEPS)
 
 .PHONY: all clean
+

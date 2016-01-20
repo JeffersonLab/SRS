@@ -5,25 +5,40 @@
 #
 
 readout list GEN_USER
-maximum 1024,512
+maximum 1024*80,512
 polling
 general readout
 
 # TRIG_MODE = TIP_READOUT_EXT_POLL for polling mode (External front panel input)
 #           = TIP_READOUT_TS_POLL  for polling mode (TS input)
 const TRIG_MODE = TIP_READOUT_EXT_POLL
-const BLOCKLEVEL = 1
+
+const BLOCKLEVEL  = 4
+const BUFFERLEVEL = 1
+
 
 # PULSER_TRIGGER 
 #   is for pedestal and/or debugging. 
 #  Set to 0 to use TS inputs or TS Fiber Connection (TRIG_MODE above)
-const PULSER_TRIGGER = 1
+const PULSER_TRIGGER      = 1
+# PULSER_TYPE   0 - Fixed   1 - Random
+const PULSER_TYPE         = 1
+# PULSER_FIXED  
+const PULSER_FIXED_NUMBER = BLOCKLEVEL
+const PULSER_FIXED_PERIOD = 16
+const PULSER_FIXED_LONG   = 1
+# PULSER_RANDOM_FREQ where arg sets frequency to 500kHz/(2^(arg-1))
+const PULSER_RANDOM_FREQ  = 0x6
 
+const DO_SRS_READOUT = 1
 
 %%
 extern int bigendian_out;
-int srsFD;
 #include "srsLib.h"
+
+int srsFD[MAX_FEC];
+char FEC[MAX_FEC][100];
+int nfec=1;
 %%
 
 ############################################################
@@ -43,8 +58,7 @@ bigendian_out = 1;
 
   tipLoadTriggerTable(0);
     
-  tipSetTriggerHoldoff(1,4,0);
-  tipSetTriggerHoldoff(2,4,0);
+  tipSetTriggerHoldoff(1,35,2);
 
   tipSetPrescale(0);
   tipSetBlockLevel(BLOCKLEVEL);
@@ -56,25 +70,113 @@ bigendian_out = 1;
 
   tipSetBusySource(TIP_BUSY_LOOPBACK ,1);
 
-  tipSetBlockBufferLevel(1);
+  tipSetBlockBufferLevel(BUFFERLEVEL);
 
   tipSetSyncEventInterval(0);
 
   /*************************************************************
    * Setup SRS 
    */
-  if(srsConnect((int*)&srsFD)==0) 
-    printf("socket created. .. (%d)\n",srsFD);
-  else
-    printf("%s: ERROR: Socket to SRS not open\n",
-	   __FUNCTION__);
 
-  srsExecConfigFile("../test/config/set_IP10012.txt");
-  srsExecConfigFile("../test/config/adc_IP10012.txt");
-  srsExecConfigFile("../test/config/fecCalPulse_IP10012.txt");
-  srsExecConfigFile("../test/config/apv_IP10012.txt");
-  srsExecConfigFile("../test/config/fecAPVreset_IP10012.txt");
-  srsExecConfigFile("../test/config/pll_IP10012.txt");
+  nfec=0;
+  /* strncpy(FEC[nfec++], "10.0.1.2",100); */
+  strncpy(FEC[nfec++], "10.0.3.2",100);
+  strncpy(FEC[nfec++], "10.0.5.2",100);
+  strncpy(FEC[nfec++], "10.0.7.2",100);
+
+  char hosts[MAX_FEC][100];
+  int ifec=0;
+  int starting_port = 7000;
+
+  for(ifec=0; ifec<nfec; ifec++)
+    {
+      sprintf(hosts[ifec],"10.0.0.%d",ifec+3);
+      srsSetDAQIP(FEC[ifec], hosts[ifec], starting_port+ifec);
+      srsConnect((int*)&srsFD[ifec], hosts[ifec], starting_port+ifec);
+    }
+
+  for(ifec=0; ifec<nfec; ifec++)
+    {
+      /* Same as call to 
+	 srsExecConfigFile("config/set_IP10012.txt"); */
+      srsSetDTCC(FEC[ifec], 
+		 1, // int dataOverEth
+		 0, // int noFlowCtrl 
+		 2, // int paddingType
+		 0, // int trgIDEnable
+		 0, // int trgIDAll
+		 4, // int trailerCnt
+		 0xaa, // int paddingByte
+		 0xdd  // int trailerByte
+		 );
+
+      /* Same as call to 
+	 srsExecConfigFile("config/adc_IP10012.txt"); */
+      srsConfigADC(FEC[ifec],
+		   0xffff, // int reset_mask
+		   0, // int ch0_down_mask
+		   0, // int ch1_down_mask
+		   0, // int eq_level0_mask
+		   0, // int eq_level1_mask
+		   0, // int trgout_enable_mask
+		   0xffff // int bclk_enable_mask
+		   );
+
+      /* Same as call to 
+	 srsExecConfigFile("config/fecCalPulse_IP10012.txt"); */
+      srsSetApvTriggerControl(FEC[ifec],
+			      4, // int mode
+			      0, // int trgburst (x+1)*3 time bins
+			      0x70, // int freq
+			      0x100, // int trgdelay
+			      0x7f, // int tpdelay
+			      0x12e // int rosync
+			      );
+      srsSetEventBuild(FEC[ifec],
+		       0xffff, // int chEnable
+		       0x34f, // int dataLength
+		       2, // int mode
+		       0, // int eventInfoType
+		       0xaabb0bb8 // unsigned int eventInfoData
+		       );
+	
+      /* Same as call to 
+	 srsExecConfigFile("config/apv_IP10012.txt"); */
+      srsAPVConfig(FEC[ifec], 
+		   0xff, // int channel_mask, 
+		   0x03, // int device_mask,
+		   0x19, // int mode, 
+		   0x80, // int latency, 
+		   0x2, // int mux_gain, 
+		   0x62, // int ipre, 
+		   0x34, // int ipcasc, 
+		   0x22, // int ipsf, 
+		   0x22, // int isha, 
+		   0x22, // int issf, 
+		   0x37, // int ipsp, 
+		   0x10, // int imuxin, 
+		   0x64, // int ical, 
+		   0x28, // int vsps,
+		   0x3c, // int vfs, 
+		   0x1e, // int vfp, 
+		   0xef, // int cdrv, 
+		   0xf7 // int csel
+		   );
+
+      /* Same as call to 
+	 srsExecConfigFile("/daqfs/home/moffit/work/SRS/test/config/fecAPVreset_IP10012.txt"); */
+      srsAPVReset(FEC[ifec]);
+
+      /* Same as call to 
+	 srsExecConfigFile("config/pll_IP10012.txt"); */
+      srsPLLConfig(FEC[ifec], 
+		   0xff, // int channel_mask,
+		   0, // int fine_delay, 
+		   0 // int trg_delay
+		   );
+      
+    }
+
 
 }
 %%
@@ -102,7 +204,11 @@ begin prestart
   tipSetBlockLimit(0);
   tipStatus(1);
 
-  srsStatus("10.0.1.2",0);
+  int ifec=0;
+  for(ifec=0; ifec<nfec; ifec++)
+    {
+      srsStatus(FEC[ifec],0);
+    }
 
   tipTrigLinkReset();
   usleep(10000);
@@ -122,17 +228,29 @@ begin go
 
 %%
 {
-  srsExecConfigFile("../test/config/start_IP10012.txt");
+  int ifec=0;
 
-  srsStatus("10.0.1.2",0);
+  for(ifec=0; ifec<nfec; ifec++)
+    {
+      srsTrigEnable(FEC[ifec]);
+      srsStatus(FEC[ifec],0);
+    }
 
   tipStatus(1);
 
   CDOENABLE(GEN,1,0);
   
-  if(PULSER_TRIGGER)
-    tipSetRandomTrigger(1,0x7);
-  
+  if(PULSER_TRIGGER==1)
+    {
+      if(PULSER_TYPE==0)
+	{
+	  tipSoftTrig(1,PULSER_FIXED_NUMBER,PULSER_FIXED_PERIOD,PULSER_FIXED_LONG);
+	}
+      else
+	{
+	  tipSetRandomTrigger(1,0x7);
+	}
+    }
 }
 %%
 
@@ -148,15 +266,29 @@ begin end
 
 %%
 {
-  if(PULSER_TRIGGER)
-  tipDisableRandomTrigger();
+  int ifec=0;
+
+  if(PULSER_TRIGGER==1)
+    {
+      if(PULSER_TYPE==0)
+	{
+	  tipSoftTrig(1,0,0,0);
+	}
+      else
+	{
+	  tipDisableRandomTrigger();
+	}
+    }
 
   CDODISABLE(GEN,1,0);
 
   tipStatus(1);
 
-  srsExecConfigFile("../test/config/stop_IP10012.txt");
-  srsStatus("10.0.1.2",0);
+  for(ifec=0; ifec<nfec; ifec++)
+    {
+      srsTrigDisable(FEC[ifec]);
+      srsStatus(FEC[ifec],0);
+    }
 }
 %%
 
@@ -193,12 +325,11 @@ begin trigger tipcie_trig
    /************************************************************
     * TI READOUT
     */
-
+   int dCnt_total=0;
    int dCnt=0;
 
    CBOPEN(0, BT_UI4, 0);
-
-   dCnt = tipReadBlock((volatile unsigned int *)rol->dabufp,32,0);
+   dCnt = tipReadBlock((volatile unsigned int *)rol->dabufp,1024,0);
    if(dCnt<=0)
      {
        printf("**************************************************\n");
@@ -211,30 +342,49 @@ begin trigger tipcie_trig
    else
      rol->dabufp += dCnt;
 
+   dCnt_total += dCnt;
+
    CBCLOSE;
 
    /************************************************************
     * SRS READOUT
     */
 
-   CBOPEN(1, BT_UI4, 0);
+   if(DO_SRS_READOUT==1)
+     {
+       CBOPEN(1, BT_UI4, 0);
 
-   dCnt = srsReadBlock(srsFD, 
-		       (volatile unsigned int *)rol->dabufp,
-		       20*1024, BLOCKLEVEL);
-   if(dCnt<=0)
-     {
-       printf("**************************************************\n");
-       printf("%6d: No SRS data or error.  dCnt = %d\n",event_no,dCnt);
-       printf("**************************************************\n");
+       int ifec=0;
+
+       for(ifec=0; ifec<nfec; ifec++)
+	 {
+
+	   dCnt=0;
+	   dCnt = srsReadBlock(srsFD[ifec],
+			       (volatile unsigned int *)rol->dabufp,
+			       20*1024, BLOCKLEVEL, NULL);
+	   if(dCnt<=0)
+	     {
+	       printf("**************************************************\n");
+	       printf("%6d: No SRS data or error.  dCnt = %d\n",event_no,dCnt);
+	       printf("**************************************************\n");
+	     }
+	   else
+	     {
+#ifdef DO_PUSH_TO_EB
+	       rol->dabufp += dCnt;
+#endif
+	       dCnt_total += dCnt;
+	     }      
+	 }
+       CBCLOSE;
      }
-   else
+
+   if(dCnt_total>=(MAX_EVENT_LENGTH>>2))
      {
-       rol->dabufp += dCnt;
-     }      
-   
-   CBCLOSE;
-   
+       printf("%s: ERROR: Data Count (%d) > Max words alloc'd (%d)\n",
+	      __FUNCTION__,dCnt_total, MAX_EVENT_LENGTH>>2);
+     }
  }
 %%
 
@@ -251,6 +401,16 @@ end done
 ############################################################
 begin done
   CDOACK(GEN,1,0);
+
+%%
+{ // PULSER ACTION, if needed
+  if((PULSER_TRIGGER==1) &&(PULSER_TYPE==0))
+    {
+      tipSoftTrig(1,PULSER_FIXED_NUMBER,PULSER_FIXED_PERIOD,PULSER_FIXED_LONG);
+    }
+}
+%%  
+
 end done
 
 begin status
@@ -261,8 +421,14 @@ end status
 %%
 int rocClose()
 {
-  srsExecConfigFile("config/stop_IP10012.txt");
+  int ifec=0;
+
+  for(ifec=0; ifec<nfec; ifec++)
+    srsTrigDisable(FEC[ifec]);
+
   sleep(1);
-  close(srsFD);
+
+  for(ifec=0; ifec<nfec; ifec++)
+      close(srsFD[ifec]);
 }
 %%

@@ -1,9 +1,24 @@
 #ifndef __SRSLIB__
 #define __SRSLIB__
-/**************1/21/15: Krishna
- *  
+/*----------------------------------------------------------------------------*/
+/**
+ *  Copyright (c) 2015        Southeastern Universities Research Association, *
+ *                            Thomas Jefferson National Accelerator Facility  *
+ *                                                                            *
+ *    This software was developed under a United States Government license    *
+ *    described in the NOTICE file included as part of this distribution.     *
+ *                                                                            *
+ *    Authors: Bryan Moffit                                                   *
+ *             moffit@jlab.org                   Jefferson Lab, MS-12B3       *
+ *             Phone: (757) 269-5660             12000 Jefferson Ave.         *
+ *             Fax:   (757) 269-5800             Newport News, VA 23606       *
+ *                                                                            *
+ *----------------------------------------------------------------------------*
  *
- *****************/
+ * Description:
+ *     Header file for SRS Library
+ *
+ *----------------------------------------------------------------------------*/
 
 #define MAX_FEC 8
 
@@ -16,12 +31,14 @@
 #define SRS_APV_ALLPLL_MASK 0xFF00
 
 
-int   srsConnect(int *sockfd);
-int   srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blocklevel);
-
+int   srsConnect(int *sockfd, char *ip, int port);
 int   srsStatus(char *ip, int pflag);
+int   srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blocklevel,
+		   int *frameCnt);
 
-int   srsSetDAQIP(char *ip, char *daq_ip);
+int   srsSetDAQIP(char *ip, char *daq_ip, int port);
+int   srsSetDTCClk(char *ip, int dtcclk_inh, int dtctrg_inh, 
+		   int dtc_swapports, int dtc_swaplanes, int dtctrg_invert);
 int   srsSetDTCC(char *ip, int dataOverEth, int noFlowCtrl, int paddingType,
 		 int trgIDEnable, int trgIDAll, int trailerCnt, int paddingByte, int trailerByte);
 int   srsConfigADC(char *ip,
