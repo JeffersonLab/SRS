@@ -20,8 +20,11 @@
 #include "byteswap.h"
 /* #include "remexLib.h" */
 
-#define BLOCKLEVEL 1
+#define BLOCKLEVEL  1
+#define BUFFERLEVEL 20
 #define DO_READOUT
+#define SOFTTRIG
+#define USEDMA 0
 
 unsigned long long calib=0;
 #define TI_DATA_SIZE  120
@@ -43,8 +46,10 @@ void mytiISR(int arg);
 void sig_handler(int signo);
 void closeup();
 extern unsigned long long int rdtsc(void);
-int triggerholdoff = 42;
-int PERIOD=10;
+int triggerholdoff = 2;
+int PERIOD=1;
+
+unsigned int chEnable = 9;
 
 int 
 main(int argc, char *argv[]) 
@@ -71,7 +76,7 @@ main(int argc, char *argv[])
   tipOpen();
 
   /* Set the TI structure pointer */
-  tipInit(TIP_READOUT_EXT_POLL,0);
+  tipInit(TIP_READOUT_EXT_POLL,USEDMA?TIP_INIT_USE_DMA:0);
   tipCheckAddresses();
 
   tipDefinePulserEventType(0xAA,0xCD);
@@ -82,7 +87,7 @@ main(int argc, char *argv[])
 
   tipLoadTriggerTable(0);
     
-  tipSetTriggerHoldoff(1,triggerholdoff,1);
+  tipSetTriggerHoldoff(1,triggerholdoff,2);
 
   tipSetPrescale(0);
   tipSetBlockLevel(BLOCKLEVEL);
@@ -95,20 +100,23 @@ main(int argc, char *argv[])
     } 
   else 
     {
-      printf("INFO: Attached TI Interrupt\n");
+      printf("INFO: Attached TI Interrupt\a\n");
     }
 
-  /*     tiSetTriggerSource(TI_TRIGGER_TSINPUTS); */
+#ifdef SOFTTRIG
   tipSetTriggerSource(TIP_TRIGGER_PULSER);
-  tipEnableTSInput(0x1);
+#else
+  tipSetTriggerSource(TIP_TRIGGER_TSINPUTS);
+#endif
+  tipEnableTSInput(0xf);
 
   /*     tiSetFPInput(0x0); */
   /*     tiSetGenInput(0xffff); */
   /*     tiSetGTPInput(0x0); */
 
-  tipSetBusySource(TIP_BUSY_LOOPBACK ,1);
+  tipSetBusySource(TIP_BUSY_LOOPBACK|TIP_BUSY_FP ,1);
 
-  tipSetBlockBufferLevel(1);
+  tipSetBlockBufferLevel(BUFFERLEVEL);
 
 /*   tiSetFiberDelay(1,2); */
 /*   tiSetSyncDelayWidth(1,0x3f,1); */
@@ -122,10 +130,10 @@ main(int argc, char *argv[])
 
 
   nfec=0;
-  /* strncpy(FEC[nfec++], "10.0.1.2",100); */
-  strncpy(FEC[nfec++], "10.0.3.2",100);
-  strncpy(FEC[nfec++], "10.0.5.2",100);
-  strncpy(FEC[nfec++], "10.0.7.2",100);
+  strncpy(FEC[nfec++], "10.0.1.2",100);
+  /* strncpy(FEC[nfec++], "10.0.3.2",100); */
+  /* strncpy(FEC[nfec++], "10.0.5.2",100); */
+  /* strncpy(FEC[nfec++], "10.0.7.2",100); */
 
   char hosts[MAX_FEC][100];
   int ifec=0;
@@ -172,17 +180,17 @@ main(int argc, char *argv[])
       DO(srsSetApvTriggerControl(FEC[ifec],
 			      4, // int mode
 			      0, // int trgburst (x+1)*3 time bins
-			      0x70, // int freq
+			      0x4, // int freq
 			      0x100, // int trgdelay
 			      0x7f, // int tpdelay
 			      0x12e // int rosync
 				 ));
       DO(srsSetEventBuild(FEC[ifec],
-		       0xffff, // int chEnable
-		       0x34f, // int dataLength
-		       2, // int mode
-		       0, // int eventInfoType
-		       0xaabb0bb8 // unsigned int eventInfoData
+			  (1<<chEnable)-1, // int chEnable
+			  500, // int dataLength
+			  2, // int mode
+			  0, // int eventInfoType
+			  0xaabb0bb8 // unsigned int eventInfoData
 			  ));
 	
       /* Same as call to 
@@ -256,11 +264,10 @@ main(int argc, char *argv[])
   tipStatus(1);
   /* tipPCIEStatus(1); */
 
-#define SOFTTRIG
 #ifdef SOFTTRIG
   tipSetRandomTrigger(1,0x7);
   /* taskDelay(10); */
-  /* tipSoftTrig(1,BLOCKLEVEL,PERIOD,1); */
+  /* tipSoftTrig(1,0xffff,PERIOD,0); */
 #endif
 
   printf("Hit any key to Disable TID and exit.\n");
@@ -326,14 +333,14 @@ void
 mytiISR(int arg)
 {
   int dCnt_ti=0, dCnt_srs=0, dCnt_srs_total=0, frameCnt=0, len=0,idata;
-  int printout = 100;
+  int printout = 1000;
   int dataCheck=0;
   unsigned long long before,after,diff=0;
   int ifec=0;
   unsigned int tiIntCount = tipGetIntCount();
 
   dCnt_ti = tipReadBlock((volatile unsigned int *)&TIdata,
-			 TI_DATA_SIZE,0);
+			 TI_DATA_SIZE,USEDMA?1:0);
   /* dCnt_ti = tipReadTriggerBlock((volatile unsigned int *)&data); */
 
   if(dCnt_ti<=0)
@@ -359,13 +366,14 @@ mytiISR(int arg)
       if(dCnt_srs<=0)
 	{
 	  printf("**************************************************\n");
-	  printf("SRS: No data or error.  dCnt = %d\n",dCnt_srs);
+	  printf("SRS: No data or error.  dCnt = %d\a\n",dCnt_srs);
 	  printf("**************************************************\n");
 	  dataCheck=ERROR;
 	}
       else
 	{
-	  if(dCnt_srs!=(6817*BLOCKLEVEL))
+	  /* if(dCnt_srs!=(3481*BLOCKLEVEL)) */
+	  if(frameCnt!=((chEnable+1)*BLOCKLEVEL))
 	    {
 	      dataCheck=ERROR;
 	      printf("SRS frameCnt = %2d dCnt = %6d ***************************\n",
@@ -382,6 +390,7 @@ mytiISR(int arg)
     {
       printf("Received %d triggers...\n",
 	     tiIntCount);
+      /* tipSoftTrig(1,0xffff,PERIOD,0); */
 
 /* #define PRINTOUT_TI */
 #ifdef PRINTOUT_TI
@@ -419,6 +428,7 @@ mytiISR(int arg)
 #endif /* PRINTOUT_TI */
     }
 
+
   return;
 
   if(dataCheck!=OK)
@@ -426,16 +436,19 @@ mytiISR(int arg)
       /* Change the trigger rule */
       tipDisableTriggerSource(0);
 
-      /* tipSetTriggerHoldoff(1,++triggerholdoff,1); */
+      /* tipSetTriggerHoldoff(1,++triggerholdoff,2); */
       /* printf(" Changed triggerholdoff to %d (%.1f usec)\n", */
-      /* 	     triggerholdoff, (float)triggerholdoff*0.160*32); */
+      /* 	     triggerholdoff, (float)triggerholdoff*5.120); */
 
-      PERIOD += 2;
+      return;
+      PERIOD += 1;
       printf(" Changed period to %d (%.1f usec)\n",
-      	     PERIOD, (32.0+8.0*(float)PERIOD*1024.0)/1000.);
+      	     PERIOD, (32.0+8.0*(float)PERIOD)/1000.);
       
+      usleep(100000);
       tipEnableTriggerSource();
     }
+
 
   extern int tipDoAck;
   

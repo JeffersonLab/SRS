@@ -206,6 +206,25 @@ srsStatus(char *ip, int pflag)
 	 sys[4]&0xffff);
   printf(" Clock Selection       0x%02x\n",(sys[0xc]&0xff));
   printf("   Status              0x%08x\n",sys[0xd]);
+  int ethclk_sel = (sys[0xc]&0x80)>>7;
+  int dtcclk_inh = (sys[0xc]&0x1);
+  int ethclk_locked = (sys[0xd]&0x2)>>1;
+  int dtcclk_locked = (sys[0xd]&0x1);
+  printf("   Main Clock Source   ");
+  if((ethclk_sel==0) && (dtcclk_inh==0) && (dtcclk_locked==0))
+    printf("LOCAL");
+  else if((ethclk_sel==0) && (dtcclk_inh==0) && (dtcclk_locked==1))
+    printf("DTC");
+  else if((ethclk_sel==0) && (dtcclk_inh==1))
+    printf("LOCAL");
+  else if((ethclk_sel==1) && (ethclk_locked==0))
+    printf("LOCAL");
+  else if((ethclk_sel==1) && (ethclk_locked==1))
+    printf("ETH");
+  else
+    printf("UNKNOWN");
+  printf("\n");
+
   printf("\n");
   printf(" DTC Config\n");
   printf("   Data over ETH       %s\t",(sys[0xb]&(1<<0))?"Enabled":"Disabled");
@@ -333,11 +352,11 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
       if (n == -1)
 	{ 
 	  if(errno == EAGAIN)
-	    printf("%s: timeout\n",__FUNCTION__);
+	    printf("%s(%d): timeout\n",__FUNCTION__,id);
 	  else
 	    {
-	      printf("%s: errno = %d  sockfd = %d\n",__FUNCTION__,l_errno,sockfd);
 	      perror("recvfrom");
+	      printf("%s(%d): ERROR",__FUNCTION__,id);
 	    }
 
 	  if(frameCnt!=NULL)

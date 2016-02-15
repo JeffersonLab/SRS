@@ -51,7 +51,7 @@ main(int argc, char *argv[])
   /* srsExecConfigFile("config/fecAPVreset_IP10012.txt"); */
   /* srsExecConfigFile("config/pll_IP10012.txt"); */
 
-  srsStatus("10.0.7.2",0);
+  srsStatus("10.0.1.2",0);
 
  CLOSE:
   closeup();
