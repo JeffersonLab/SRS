@@ -14,13 +14,14 @@
 DEBUG=1
 #
 TIPCIE_PATH		= /daqfs/home/moffit/work/TIpcie
+SRS_PATH		= /daqfs/home/moffit/work/SRS
 
 # DEFs for compiling CODA readout lists
-CC			= gcc
+CC			= gcc -m32
 CCRL			= ${CODA_BIN}/ccrl
-CODA_INCS		= -I. -I${TIPCIE_PATH} -I${CODA}/common/include
-CODA_LIBDIRS            = -L. -L${TIPCIE_PATH} 
-CODA_LIBS		= -lTIpcie
+CODA_INCS		= -I. -I${TIPCIE_PATH} -I${SRS_PATH} -I${CODA}/common/include
+CODA_LIBDIRS            = -L. -L${TIPCIE_PATH} -L${SRS_PATH}
+CODA_LIBS		= -lTIpcie -lsrs
 CODA_DEFS		= -DLINUX -DDAYTIME=\""`date`"\"
 CODA_CFLAGS		= -w -fpic -shared ${CODA_INCS} ${CODA_LIBDIRS} \
 			  ${CODA_LIBS} ${CODA_DEFS}
@@ -36,34 +37,25 @@ DEPS			= $(CRLFILES:.crl=.d)
 
 all: $(SOBJS) 
 
+%.so : %.c
+	@echo
+	@echo "Building $@ from $<"
+	${CC} ${CODA_CFLAGS} -o $@ $<
+
 %.c: %.crl
 	@echo
 	@echo "Converting $< to $@"
 	@${CCRL} $<
 
-%.so: %.c
-	@echo
-	@echo "Building $@ from $<"
-	@echo
-	${CC} ${CODA_CFLAGS} -o $@ $<
-
-tipcie_list.so: tipcie_list.c
-	@echo
-	@echo "Building $@ from $<"
-	@echo
-	${CC} ${CODA_CFLAGS} -o $@ $<
-
-clean distclean:
-	@rm -f  $(ROLS) $(SOBJS) $(CFILES) *~ 
+clean:
+	@rm -f  $(ROLS) $(SOBJS) $(CFILES) ${DEPS} ${DEPS}.* *~ 
 
 %.d: %.c
 	@echo ""
 	@echo "Building $@ from $<"
-	@set -e; rm -f $@; \
-	$(CC) -MM -shared $(CODA_INCS) $< > $@.$$$$; \
-	sed 's,\($*\)\.so[ :]*,\1 $@ : ,g' < $@.$$$$ > $@; \
-	rm -f $@.$$$$
+	@$(CC) -MM -MT "$(<:.c=.so) $@" -MD -shared $(CODA_INCS) $<
 
 -include $(DEPS)
 
-.PHONY: all
+.PHONY: all clean
+

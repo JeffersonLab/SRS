@@ -48,7 +48,10 @@
 
 static int srsDebugMode=0; 
 static int srsSockFD[MAX_FEC];
+int nsrsSockFD=0;
 unsigned long long before, after, diff=0;
+int srsFrameNumber[MAX_FEC];
+int srsID[MAX_FEC];
 
 static int srsSlowControl(char *ip, int port, 
 			  unsigned int *req_fields, int nfields,
@@ -67,12 +70,11 @@ pthread_mutex_t     srsMutex = PTHREAD_MUTEX_INITIALIZER;
 #define SRSUNLOCK   if(pthread_mutex_unlock(&srsMutex)<0) perror("pthread_mutex_unlock");
 
 int
-srsConnect(int *sockfd) /* formally createAndBinSocket */
+srsConnect(int *sockfd, char *ip, int port) /* formally createAndBinSocket */
 {
   struct sockaddr_in my_addr; 
   struct timeval socket_timeout={0,900000}; /* 900 microsecond time out */
   int stat=0;
-  int PORT = 6006;
 
   *sockfd = socket(AF_INET, SOCK_DGRAM,0);
   if (*sockfd==-1)    
@@ -98,17 +100,23 @@ srsConnect(int *sockfd) /* formally createAndBinSocket */
       printf("%s: errno = %d\n",__FUNCTION__,errno);
     }
 
+  int enable = 1;
+  if (setsockopt(*sockfd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0)
+    perror("SO_REUSEADDR failed");
+
   memset(&my_addr, 0, sizeof(my_addr));
 
   my_addr.sin_family      = AF_INET;
-  my_addr.sin_port        = htons(PORT);
-  my_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  my_addr.sin_port        = htons(port);
+  /* my_addr.sin_addr.s_addr = htonl(INADDR_ANY); */
+  inet_aton(ip, (struct in_addr *)&my_addr.sin_addr.s_addr);
 
   stat = bind(*sockfd, (struct sockaddr* ) &my_addr, sizeof(my_addr));
 
   if (stat==-1) 
     {
       perror("bind");
+      close(*sockfd);
       return -1;
     }
   else
@@ -117,14 +125,22 @@ srsConnect(int *sockfd) /* formally createAndBinSocket */
 	printf("Server : bind() successful\n");
     }
 
-  before = rdtsc();
-  sleep(1);
-  after = rdtsc();
-  diff = after-before;
-  printf("%s: norm = %lld\n",__FUNCTION__,diff);
+  srsSockFD[nsrsSockFD++] = *sockfd;
 
   return 0;
 }
+
+int
+srsGetID(int sockfd)
+{
+  int ifec;
+  for(ifec=0; ifec<nsrsSockFD; ifec++)
+    if(sockfd==srsSockFD[ifec])
+      return ifec;
+
+  return -1;
+}
+
 
 int
 srsStatus(char *ip, int pflag)
@@ -156,6 +172,8 @@ srsStatus(char *ip, int pflag)
       printf("%s: ERROR reading APVAPP port\n",__FUNCTION__);
       return -1;
     }
+
+#ifdef SKIPBROKEN
   if(srsReadBurst(ip, SRS_APV_PORT, SRS_APV_ALLAPV_MASK, 0, napv, apv, napv)<0)
     {
       printf("%s: ERROR reading APV port\n",__FUNCTION__);
@@ -171,6 +189,7 @@ srsStatus(char *ip, int pflag)
       printf("%s: ERROR reading ADCCARD port\n",__FUNCTION__);
       return -1;
     }
+#endif
 
   printf("\n");
   printf("STATUS for SRS device at %s \n",ip);
@@ -187,6 +206,25 @@ srsStatus(char *ip, int pflag)
 	 sys[4]&0xffff);
   printf(" Clock Selection       0x%02x\n",(sys[0xc]&0xff));
   printf("   Status              0x%08x\n",sys[0xd]);
+  int ethclk_sel = (sys[0xc]&0x80)>>7;
+  int dtcclk_inh = (sys[0xc]&0x1);
+  int ethclk_locked = (sys[0xd]&0x2)>>1;
+  int dtcclk_locked = (sys[0xd]&0x1);
+  printf("   Main Clock Source   ");
+  if((ethclk_sel==0) && (dtcclk_inh==0) && (dtcclk_locked==0))
+    printf("LOCAL");
+  else if((ethclk_sel==0) && (dtcclk_inh==0) && (dtcclk_locked==1))
+    printf("DTC");
+  else if((ethclk_sel==0) && (dtcclk_inh==1))
+    printf("LOCAL");
+  else if((ethclk_sel==1) && (ethclk_locked==0))
+    printf("LOCAL");
+  else if((ethclk_sel==1) && (ethclk_locked==1))
+    printf("ETH");
+  else
+    printf("UNKNOWN");
+  printf("\n");
+
   printf("\n");
   printf(" DTC Config\n");
   printf("   Data over ETH       %s\t",(sys[0xb]&(1<<0))?"Enabled":"Disabled");
@@ -220,6 +258,7 @@ srsStatus(char *ip, int pflag)
   printf("\n");
   printf(" Readout is %s (0x%x)\n",(apvapp[0xf]&0x1)?"Enabled":"Disabled", apvapp[0xf]);
 
+#ifdef SKIPBROKEN
   printf("\n");
   printf("--------------------------------------------------------------------------------\n");
   printf("                             APV Summary (ALL APVs)\n\n");
@@ -258,6 +297,8 @@ srsStatus(char *ip, int pflag)
   printf(" TrgOut Enable Mask    0x%02x\n",adccard[5]&0xff);
   printf(" BCLK Enable Mask      0x%02x\n",adccard[6]&0xff);
 
+#endif /* SKIPBROKEN */
+
   printf("\n");
   printf("--------------------------------------------------------------------------------\n");
   printf("\n\n");
@@ -266,7 +307,7 @@ srsStatus(char *ip, int pflag)
 }
 
 int 
-srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blocklevel)
+srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blocklevel, int *frameCnt)
 {
   int trigNum=0, n=0;
   struct sockaddr_in cli_addr;  
@@ -276,14 +317,26 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
   int nwords=0;
   unsigned long long total=0;
   int l_errno=0;
-  int Index=0;
+  int l_frameCnt=0;
+  int id=0;
+  
+  id=srsGetID(sockfd);
+  if(id==-1)
+    {
+      printf("%s: ERROR: SRS socket file descriptor (%d) not initialized\n",
+	     __FUNCTION__,sockfd);
+      return -1;
+    }
+
+  srsFrameNumber[id]=0;
 
   ptr = (unsigned int*)buf_in; 
 
   while(1)
     {
       if(srsDebugMode)
-	printf("%s: call recvfrom  buf = 0x%lx\n",__FUNCTION__,(unsigned long)ptr);
+	printf("%s: call recvfrom  buf = 0x%lx  nwrds = %d\n",
+	       __FUNCTION__,(unsigned long)ptr,nwrds);
 
       before = rdtsc();
       n = recvfrom(sockfd, (void *)ptr, nwrds*sizeof(unsigned int), 
@@ -299,24 +352,29 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
       if (n == -1)
 	{ 
 	  if(errno == EAGAIN)
-	    printf("%s: timeout\n",__FUNCTION__);
+	    printf("%s(%d): timeout\n",__FUNCTION__,id);
 	  else
 	    {
-	      printf("%s: errno = %d  sockfd = %d\n",__FUNCTION__,l_errno,sockfd);
 	      perror("recvfrom");
+	      printf("%s(%d): ERROR",__FUNCTION__,id);
 	    }
+
+	  if(frameCnt!=NULL)
+	    *frameCnt = l_frameCnt++;
 	  return nwords;
 	}
 
       if (n>=4)
 	{
+	  l_frameCnt++;
+
 	  if(srsDebugMode)
 	    printf("Received packet from %s:%d of length %i\n",
 		   inet_ntoa(cli_addr.sin_addr), ntohs(cli_addr.sin_port), n);
 
 
 	  /* Save the data at the beginning of the frame */
-	  rawdata = *ptr;
+	  rawdata = bswap_32(*ptr);
 
 	  /* Bump the pointer and number of words by the return value */
 	  ptr    += n/4;
@@ -325,32 +383,48 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
 	  if(srsDebugMode)
 	    printf("%d  0x%x\n",nwords,bswap_32(rawdata));
 
+	  /* FIXME: Check the frame number !!! */
 	  /* Check if we've gotten the event-trailer (in its own frame) */
 	  if(rawdata == 0xfafafafa) /* event-trailer frame */
 	    {
+	      if(srsDebugMode)
+		printf("--- Received event trailer --- \n");
+	      
+	      /* Reset frame number for next trigger */
+	      srsFrameNumber[id]=0;
 	      /* Bump the trigger number */
 	      trigNum++;
 	      if(trigNum==blocklevel) /* Quit... */
 		break;
 	    }
 	  else
-	    continue;
-	  
+	    {
+	      if((rawdata&0xff) != srsFrameNumber[id])
+		{
+		  printf("%s(%d): ERROR: Expected frame number %x.  Received %x.\n",
+			 __FUNCTION__,id,srsFrameNumber[id], rawdata&0xff);
+		}
+	      srsFrameNumber[id]++;
+	    }
 	}
     }
 
+  if(frameCnt!=NULL)
+    *frameCnt = l_frameCnt++;
 
-/*   printf("%s: total = %lld\n",__FUNCTION__,total); */
+  if(srsDebugMode)
+    if(frameCnt!=NULL)
+      printf("%s: frameCnt = %d\n",__FUNCTION__,*frameCnt);
 
   return nwords;
 }
 
 int
-srsSetDAQIP(char *ip, char *daq_ip)
+srsSetDAQIP(char *ip, char *daq_ip, int port)
 {
   int stat=0;
   struct in_addr sa;
-  const int nregs=1;
+  const int nregs=2;
   unsigned int reg[nregs];
   unsigned int data[nregs];
   
@@ -360,8 +434,33 @@ srsSetDAQIP(char *ip, char *daq_ip)
       return -1;
     }
 
-  reg[0]  = 0xa;
-  data[0] = bswap_32(sa.s_addr);
+  reg[0]  = 0x4;
+  data[0] = port;
+
+  reg[1]  = 0xa;
+  data[1] = bswap_32(sa.s_addr);
+
+  stat = srsWritePairs(ip, SRS_SYS_PORT, 0, reg, nregs, data,nregs);
+
+  return stat;
+}
+
+int
+srsSetDTCClk(char *ip, int dtcclk_inh, int dtctrg_inh, 
+	    int dtc_swapports, int dtc_swaplanes, int dtctrg_invert)
+{
+  int stat=0;
+  const int nregs=1;
+  unsigned int reg[nregs];
+  unsigned int data[nregs];
+
+  reg[0]  = 0xc;
+  data[0] = (dtcclk_inh) | (dtctrg_inh<<1) | 
+    (dtc_swapports<<2) | (dtc_swaplanes<<3) |
+    (dtctrg_invert<<4) ;
+		     
+  if(srsDebugMode)
+    printf("%s: data = 0x%08x\n",__FUNCTION__,data[0]);
 
   stat = srsWritePairs(ip, SRS_SYS_PORT, 0, reg, nregs, data,nregs);
 
@@ -562,7 +661,7 @@ srsAPVConfig(char *ip, int channel_mask, int device_mask,
 	     int vfs, int vfp, int cdrv, int csel)
 {
   int stat=0;
-  const int nregs=0x1D;
+  const int nregs=16;
   unsigned int regs[nregs];
   unsigned int data[nregs];
   unsigned int subaddr=0;
@@ -827,10 +926,14 @@ srsWritePairs(char *ip, int port,
     default:
       /* printf("%s: Reading All registers from port %d not supported\n", */
       /* 	     __FUNCTION__,port); */
-      nregs=0xff;
+      maxregs=0xff;
     }
 
-  write_command = (unsigned int *)malloc((nregs+4)*sizeof(unsigned int));
+  if(srsDebugMode)
+    printf("%s: ip = %s:%d sub_addr = 0x%x  nregs = %d\n",
+	   __FUNCTION__,ip,port,sub_addr,nregs);
+
+  write_command = (unsigned int *)malloc((2*nregs+4)*sizeof(unsigned int));
   if(write_command==NULL)
     {
       perror("malloc");
@@ -891,8 +994,8 @@ srsSlowControl(char *ip, int port,
 
   if(srsDebugMode)
     {
-      printf("%s: Writing to port %d  ip %s\n",
-	     __FUNCTION__,port, ip);
+      printf("%s: Writing to port %d  ip %s nfields = %d\n",
+	     __FUNCTION__,port, ip,nfields);
       for(iword=0; iword<nfields; iword++)
 	printf("%2d: 0x%08x\n",iword,bswap_32(req_fields[iword]));
     }

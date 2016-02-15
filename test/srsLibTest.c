@@ -44,12 +44,12 @@ main(int argc, char *argv[])
 
   srsSetDebugMode(1);
 
-  srsExecConfigFile("config/set_IP10012.txt");
-  srsExecConfigFile("config/adc_IP10012.txt");
-  srsExecConfigFile("config/fecCalPulse_IP10012.txt");
-  srsExecConfigFile("config/apv_IP10012.txt");
-  srsExecConfigFile("config/fecAPVreset_IP10012.txt");
-  srsExecConfigFile("config/pll_IP10012.txt");
+  /* srsExecConfigFile("config/set_IP10012.txt");sys */
+  /* srsExecConfigFile("config/adc_IP10012.txt"); */
+  /* srsExecConfigFile("config/fecCalPulse_IP10012.txt"); */
+  /* srsExecConfigFile("config/apv_IP10012.txt"); */
+  /* srsExecConfigFile("config/fecAPVreset_IP10012.txt"); */
+  /* srsExecConfigFile("config/pll_IP10012.txt"); */
 
   srsStatus("10.0.1.2",0);
 
