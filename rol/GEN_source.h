@@ -71,7 +71,7 @@ gentenable(int code, int card)
   if(GEN_isAsync==0)
     {
       GENflag = 1;
-      tipDoLibraryPollingThread(0); /* Turn off library polling */
+      tipDoLibraryPollingThread(0); /* Turn off library polling */	
     }
   
   tipIntEnable(1); 
@@ -84,6 +84,7 @@ gentdisable(int code, int card)
   if(GEN_isAsync==0)
     {
       GENflag = 0;
+      tipDoLibraryPollingThread(0); /* Turn off library polling */	
     }
   tipIntDisable();
   tipIntDisconnect();
@@ -142,8 +143,12 @@ gentack(int code, unsigned int intMask)
     GEN_isAsync = 0;				\
     GENflag = 0;}
 
-#define GEN_ASYNC(code,id)  {printf("linking async GEN trigger to id %d \n",id); \
-    GEN_handlers = (id);GEN_isAsync = 1;gentriglink(code,GEN_int_handler);}
+#define GEN_ASYNC(code,id)  {						\
+  printf("linking async GEN trigger to id %d \n",id);			\
+  GEN_handlers = (id);							\
+  GEN_isAsync = 1;							\
+  gentriglink(code,GEN_int_handler);					\
+}
 
 #define GEN_SYNC(code,id)   {printf("linking sync GEN trigger to id %d \n",id); \
     GEN_handlers = (id);GEN_isAsync = 0;}

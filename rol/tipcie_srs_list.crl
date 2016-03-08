@@ -5,12 +5,12 @@
 #
 
 readout list GEN_USER
-maximum 1024*80,512
+maximum 1024*80*2,512
 polling
 general readout
 
 # TRIG_MODE = TIP_READOUT_EXT_POLL for polling mode (External front panel input)
-#           = TIP_READOUT_TS_POLL  for polling mode (TS input)
+#           = TIP_READOUT_TS_POLL  for polling mode (Fiber input from TS)
 const TRIG_MODE = TIP_READOUT_EXT_POLL
 
 const BLOCKLEVEL  = 1
@@ -19,7 +19,7 @@ const BUFFERLEVEL = 4
 
 # PULSER_TRIGGER 
 #   is for pedestal and/or debugging. 
-#  Set to 0 to use TS inputs or TS Fiber Connection (TRIG_MODE above)
+#  Set to 0 to use Front Panel inputs or TS Fiber Connection (TRIG_MODE above)
 const PULSER_TRIGGER      = 1
 # PULSER_TYPE   0 - Fixed   1 - Random
 const PULSER_TYPE         = 1
@@ -28,7 +28,7 @@ const PULSER_FIXED_NUMBER = BLOCKLEVEL
 const PULSER_FIXED_PERIOD = 2
 const PULSER_FIXED_LONG   = 1
 # PULSER_RANDOM_FREQ where arg sets frequency to 500kHz/(2^(arg-1))
-const PULSER_RANDOM_FREQ  = 0xa
+const PULSER_RANDOM_FREQ  = 0x7
 
 const DO_SRS_READOUT = 1
 
@@ -39,9 +39,6 @@ extern int bigendian_out;
 int srsFD[MAX_FEC];
 char FEC[MAX_FEC][100];
 int nfec=1;
-extern unsigned long long int rdtsc(void);
-unsigned long long int T_begin_ti=0, T_begin_srs=0, T_end=0, T_diff=0;
-extern int tipTriedAgain;
 
 %%
 
@@ -62,7 +59,15 @@ bigendian_out = 1;
 
   tipLoadTriggerTable(0);
     
-  tipSetTriggerHoldoff(1,1,2);
+  /* Trigger Holdoff:
+   *                   rule
+   *    timestep    1      2      3      4
+   *    -------   -----  ----- ------ ------
+   *       0       16ns   16ns   16ns   16ns 
+   *       1      160ns  500ns  500ns  500ns 
+   *       2     5120ns
+   */
+  tipSetTriggerHoldoff(1,1,2); // Set to ~10usec for busy feedback
   tipSetTriggerHoldoff(2,0,2);
   tipSetTriggerHoldoff(3,0,2);
   tipSetTriggerHoldoff(4,0,2);
@@ -73,12 +78,23 @@ bigendian_out = 1;
   if(PULSER_TRIGGER)
     tipSetTriggerSource(TIP_TRIGGER_PULSER);
   else
-    tipSetTriggerSource(TIP_TRIGGER_TSINPUTS);
+    {
+      tipSetTriggerSource(TIP_TRIGGER_TSINPUTS);
 
-  tipSetBusySource(TIP_BUSY_LOOPBACK|TIP_BUSY_FP ,1);
+      /* Enable input 1 and 2 */
+      tipEnableTSInput(TIP_TSINPUT_1 | TIP_TSINPUT_2);
+  }
 
+  /* Enable self and front panel busy input */
+  tipSetBusySource(TIP_BUSY_LOOPBACK | TIP_BUSY_FP ,1);
+
+  /* Number of blocks allowed in the system at any given time */
   tipSetBlockBufferLevel(BUFFERLEVEL);
 
+  /* Sync Event interval
+   *  0 : off
+   *  n : Sync event every n blocks
+   */
   tipSetSyncEventInterval(0);
 
   /*************************************************************
@@ -86,8 +102,10 @@ bigendian_out = 1;
    */
 
   nfec=0;
+  strncpy(FEC[nfec++], "10.0.0.2",100);
   strncpy(FEC[nfec++], "10.0.1.2",100);
   /* strncpy(FEC[nfec++], "10.0.3.2",100); */
+  /* strncpy(FEC[nfec++], "10.0.4.2",100); */
   /* strncpy(FEC[nfec++], "10.0.5.2",100); */
   /* strncpy(FEC[nfec++], "10.0.7.2",100); */
 
@@ -95,6 +113,9 @@ bigendian_out = 1;
   int ifec=0;
   int starting_port = 7000;
 
+  memset(&srsFD, 0, sizeof(srsFD));
+
+  /* Associate FECs with Specific Host IPs and ports */
   for(ifec=0; ifec<nfec; ifec++)
     {
       sprintf(hosts[ifec],"10.0.0.%d",ifec+3);
@@ -102,6 +123,7 @@ bigendian_out = 1;
       srsConnect((int*)&srsFD[ifec], hosts[ifec], starting_port+ifec);
     }
 
+  /* Configure FEC */
   for(ifec=0; ifec<nfec; ifec++)
     {
       /* Same as call to 
@@ -140,11 +162,11 @@ bigendian_out = 1;
 			      0x12e // int rosync
 			      );
       srsSetEventBuild(FEC[ifec],
-		       0xfff, // int chEnable
+		       0x1ff, // int chEnable
 		       500, // int dataLength
 		       2, // int mode
 		       0, // int eventInfoType
-		       0xaabb0bb8 // unsigned int eventInfoData
+		       0xaa000bb8 | (ifec<<16) // unsigned int eventInfoData
 		       );
 	
       /* Same as call to 
@@ -208,7 +230,6 @@ begin prestart
 
 %%
 {
-  tipSetBlockLimit(0);
   tipStatus(1);
 
   int ifec=0;
@@ -239,9 +260,7 @@ begin go
 
   for(ifec=0; ifec<nfec; ifec++)
     {
-      /* if(DO_SRS_READOUT==1) */
-	srsTrigEnable(FEC[ifec]);
-
+      srsTrigEnable(FEC[ifec]);
       srsStatus(FEC[ifec],0);
     }
 
@@ -252,6 +271,7 @@ begin go
   
   if(PULSER_TRIGGER==1)
     {
+      /* Enable TI pulser */
       if(PULSER_TYPE==0)
 	{
 	  tipSoftTrig(1,PULSER_FIXED_NUMBER,PULSER_FIXED_PERIOD,PULSER_FIXED_LONG);
@@ -280,6 +300,7 @@ begin end
 
   if(PULSER_TRIGGER==1)
     {
+      /* Disable TI pulser */
       if(PULSER_TYPE==0)
 	{
 	  tipSoftTrig(1,0,0,0);
@@ -296,7 +317,6 @@ begin end
 
   for(ifec=0; ifec<nfec; ifec++)
     {
-      /* if(DO_SRS_READOUT==1) */
 	srsTrigDisable(FEC[ifec]);
 
       srsStatus(FEC[ifec],0);
@@ -334,53 +354,13 @@ begin trigger tipcie_trig
 
 %%
  {
-   int dCnt_total=0;
+   int dCnt_total=0; /* Running total of data collected */
    int dCnt=0;
-   static int counter=0;
-   counter++;
-
-   /************************************************************
-    * SRS READOUT
-    */
-   T_begin_srs=rdtsc();
-
-   if(DO_SRS_READOUT==1)
-     {
-       CBOPEN(1, BT_UI4, 0);
-
-       int ifec=0;
-
-       for(ifec=0; ifec<nfec; ifec++)
-	 {
-
-	   dCnt=0;
-	   dCnt = srsReadBlock(srsFD[ifec],
-			       (volatile unsigned int *)rol->dabufp,
-			       20*1024, BLOCKLEVEL, NULL);
-	   if(dCnt<=0)
-	     {
-	       printf("**************************************************\n");
-	       printf("%6d: No SRS data or error.  dCnt = %d\n",event_no,dCnt);
-	       printf("**************************************************\n");
-	     }
-	   else
-	     {
-/* #define DO_PUSH_TO_EB */
-#ifdef DO_PUSH_TO_EB
-	       rol->dabufp += dCnt;
-#endif
-	       dCnt_total += dCnt;
-	     }      
-	 }
-       CBCLOSE;
-     }
 
    /************************************************************
     * TI READOUT
     */
-   T_begin_ti=rdtsc();
-
-   CBOPEN(0, BT_UI4, 0);
+   CBOPEN(4, BT_UI4, 0);
    dCnt = tipReadBlock((volatile unsigned int *)rol->dabufp,1024,0);
    if(dCnt<=0)
      {
@@ -398,24 +378,95 @@ begin trigger tipcie_trig
 
    CBCLOSE;
 
+   /************************************************************
+    * SRS READOUT
+    */
 
+   int ifec=0;
+   int nframes=0;
+
+   for(ifec=0; ifec<nfec; ifec++)
+     {
+
+       dCnt=0;
+       CBOPEN(5+ifec, BT_UI4, 0);
+       dCnt = srsReadBlock(srsFD[ifec],
+			   (volatile unsigned int *)rol->dabufp,
+			   2*80*1024, BLOCKLEVEL, &nframes);
+       if(dCnt<=0)
+	 {
+	   printf("**************************************************\n");
+	   printf("%6d: No SRS data or error.  dCnt = %d\n",event_no,dCnt);
+	   printf("**************************************************\n");
+	 }
+       else
+	 {
+#define CHECKFRAMES
+#ifdef CHECKFRAMES
+	   if(nframes!=10)
+	     {
+	       int idata=0, len = dCnt;
+	       unsigned int *SRSdata = rol->dabufp;
+	       int icounter=0;
+	       int samples=0;
+	       unsigned int tmpData=0;
+
+		   
+	       for(idata=0;idata<(len);idata++)
+		 {
+
+		   if ((SRSdata[idata]&0xffffff)==0x434441)
+		     icounter=0;
+
+		   if((icounter%8)==0) 
+		     printf("\n%4d\t",icounter);
+
+		   if(icounter==1)
+		     samples = (LSWAP(SRSdata[idata])) & 0xffff;
+
+		   if (((icounter-2)*2)==samples)
+		     {
+		       icounter=0;
+		       printf("\n");
+		     }
+
+		   if(icounter<2)
+		     printf("  0x%08x ",(unsigned int)LSWAP(SRSdata[idata]));
+		   else
+		     {
+		       tmpData = (unsigned int)LSWAP(SRSdata[idata]);
+		       printf("   %04x %04x ",
+			      (tmpData&0xFF000000)>>24 | (tmpData&0x00FF0000)>>8, 
+			      (tmpData&0x0000FF00)>>8 | (tmpData&0x000000FF)<<8
+			      );
+		     }
+		   icounter++;
+		 }
+	       printf("paused\n");
+	       getchar();
+
+	     }
+#endif
+
+	   /* Bump data buffer by the amount of data received */
+	   rol->dabufp += dCnt;
+
+	   dCnt_total += dCnt;
+
+	 }      
+       CBCLOSE;
+
+     }
+
+   /*
+     Check to see if there's too much data in this event 
+     (Compared to the event buffer size)
+   */
    if(dCnt_total>=(MAX_EVENT_LENGTH>>2))
      {
-       printf("%s: ERROR: Data Count (%d) > Max words alloc'd (%d)\n",
-	      __FUNCTION__,dCnt_total, MAX_EVENT_LENGTH>>2);
+       printf("%s: %8d ERROR: Data Count (%d) > Max words alloc'd (%d)\n",
+	      __FUNCTION__,event_no,dCnt_total, MAX_EVENT_LENGTH>>2);
      }
-   
-   T_end=rdtsc();
-
-#ifdef PRINTTIME   
-   if((counter%1000)==0)
-     {
-       printf("TI_RO time = %lld    SRS_RO time = %lld   TOTAL = %lld\n",
-	      (T_end-T_begin_ti), 
-	      (T_begin_ti-T_begin_srs),
-	      (T_end-T_begin_srs));
-     }
-#endif
    
  }
 %%
@@ -451,7 +502,8 @@ end status
 
 
 %%
-int rocClose()
+int 
+rocClose()
 {
   int ifec=0;
 
@@ -461,6 +513,9 @@ int rocClose()
   sleep(1);
 
   for(ifec=0; ifec<nfec; ifec++)
-      close(srsFD[ifec]);
+    {
+      if(srsFD[ifec])
+	close(srsFD[ifec]);
+    }
 }
 %%

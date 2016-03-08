@@ -383,7 +383,6 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
 	  if(srsDebugMode)
 	    printf("%d  0x%x\n",nwords,bswap_32(rawdata));
 
-	  /* FIXME: Check the frame number !!! */
 	  /* Check if we've gotten the event-trailer (in its own frame) */
 	  if(rawdata == 0xfafafafa) /* event-trailer frame */
 	    {
@@ -403,6 +402,11 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
 		{
 		  printf("%s(%d): ERROR: Expected frame number %x.  Received %x.\n",
 			 __FUNCTION__,id,srsFrameNumber[id], rawdata&0xff);
+		}
+	      if(srsDebugMode)
+		{
+		  printf("%s(%d): Timestamp = 0x%06x\n",
+			 __FUNCTION__,id,rawdata>>8);
 		}
 	      srsFrameNumber[id]++;
 	    }
@@ -1027,7 +1031,7 @@ srsSlowControl(char *ip, int port,
   nwords = srsReceiveData(response, maxwords);
   if(nwords<0)
     {
-      printf("%s: Failed to receive data\n",__FUNCTION__);
+      printf("%s(%s): Failed to receive data\n",__FUNCTION__,ip);
       srsCloseSocket();
 
       if(response)
@@ -1233,29 +1237,22 @@ srsSendData(unsigned int *buffer, int nwords)
 static int
 srsReceiveData(unsigned int *buffer, int nwords) 
 {
-  int n, try=0;
-  int l_errno;
+  int n;
   int dCnt;
   socklen_t g_len;
   struct sockaddr_in g_cliaddr;
       
   n = recvfrom(g_sockfd,(void *)buffer,nwords*sizeof(unsigned int),
 	       0,(struct sockaddr *) &g_cliaddr,&g_len);
-  while ((n<0) && (try<10))
+  
+  if(n<0)
     {
-      try++;
-      l_errno = errno;
       perror("recvfrom");
-      n = recvfrom(g_sockfd,(void *)buffer,nwords*sizeof(unsigned int),
-		   0,(struct sockaddr *) &g_cliaddr,&g_len);
-    }
-  dCnt = n>>2;
-
-  if(try==10)
-    {
       printf("%s: ERROR: Timeout\n",__FUNCTION__);
       return -1;
     }
+
+  dCnt = n>>2;
 
   if(srsDebugMode)
     {

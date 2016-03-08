@@ -21,14 +21,14 @@
 /* #include "remexLib.h" */
 
 #define BLOCKLEVEL  1
-#define BUFFERLEVEL 20
+#define BUFFERLEVEL 0
 #define DO_READOUT
 #define SOFTTRIG
 #define USEDMA 0
 
 unsigned long long calib=0;
 #define TI_DATA_SIZE  120
-#define SRS_DATA_SIZE (3*6817*BLOCKLEVEL)
+#define SRS_DATA_SIZE (1024*80*2)
 volatile unsigned int TIdata[TI_DATA_SIZE], SRSdata[SRS_DATA_SIZE];
 int srsFD[MAX_FEC];
 char FEC[MAX_FEC][100];
@@ -46,7 +46,7 @@ void mytiISR(int arg);
 void sig_handler(int signo);
 void closeup();
 extern unsigned long long int rdtsc(void);
-int triggerholdoff = 2;
+int triggerholdoff = 1;
 int PERIOD=1;
 
 unsigned int chEnable = 9;
@@ -88,6 +88,9 @@ main(int argc, char *argv[])
   tipLoadTriggerTable(0);
     
   tipSetTriggerHoldoff(1,triggerholdoff,2);
+  tipSetTriggerHoldoff(2,0,2);
+  tipSetTriggerHoldoff(3,0,2);
+  tipSetTriggerHoldoff(4,0,2);
 
   tipSetPrescale(0);
   tipSetBlockLevel(BLOCKLEVEL);
@@ -130,14 +133,18 @@ main(int argc, char *argv[])
 
 
   nfec=0;
+  strncpy(FEC[nfec++], "10.0.0.2",100);
   strncpy(FEC[nfec++], "10.0.1.2",100);
   /* strncpy(FEC[nfec++], "10.0.3.2",100); */
+  strncpy(FEC[nfec++], "10.0.4.2",100);
   /* strncpy(FEC[nfec++], "10.0.5.2",100); */
   /* strncpy(FEC[nfec++], "10.0.7.2",100); */
 
   char hosts[MAX_FEC][100];
   int ifec=0;
   int starting_port = 7000;
+
+  memset(&srsFD, 0, sizeof(srsFD));
 
   for(ifec=0; ifec<nfec; ifec++)
     {
@@ -178,8 +185,8 @@ main(int argc, char *argv[])
       /* Same as call to 
 	 srsExecConfigFile("config/fecCalPulse_IP10012.txt"); */
       DO(srsSetApvTriggerControl(FEC[ifec],
-			      4, // int mode
-			      0, // int trgburst (x+1)*3 time bins
+			      4+2, // int mode
+			      4, // int trgburst (x+1)*3 time bins
 			      0x4, // int freq
 			      0x100, // int trgdelay
 			      0x7f, // int tpdelay
@@ -187,10 +194,11 @@ main(int argc, char *argv[])
 				 ));
       DO(srsSetEventBuild(FEC[ifec],
 			  (1<<chEnable)-1, // int chEnable
-			  500, // int dataLength
+			  2300, // int dataLength
+			  /* 500, // int dataLength */
 			  2, // int mode
 			  0, // int eventInfoType
-			  0xaabb0bb8 // unsigned int eventInfoData
+			  0xaa000bb8 | (ifec<<16) // unsigned int eventInfoData
 			  ));
 	
       /* Same as call to 
@@ -308,7 +316,8 @@ void closeup()
   sleep(1);
   for(ifec=0; ifec<nfec; ifec++)
     {
-      close(srsFD[ifec]);
+      if(srsFD[ifec])
+	close(srsFD[ifec]);
     }
 
   tipClose();
@@ -333,7 +342,7 @@ void
 mytiISR(int arg)
 {
   int dCnt_ti=0, dCnt_srs=0, dCnt_srs_total=0, frameCnt=0, len=0,idata;
-  int printout = 1000;
+  int printout = 100;
   int dataCheck=0;
   unsigned long long before,after,diff=0;
   int ifec=0;
@@ -404,26 +413,48 @@ mytiISR(int arg)
       printf("\n\n");
 #endif /* PRINTOUT_TI */
 
-/* #define PRINTOUT_SRS */
+#define PRINTOUT_SRS
 #ifdef PRINTOUT_SRS
       len = dCnt_srs_total;
       int icounter=0;
+      int samples=0;
+      unsigned int tmpData=0;
       
       if(dataCheck!=OK)
 	{
 	  printf("srs len = %d\n",len);
 	  for(idata=0;idata<(len);idata++)
 	    {
+
 	      if ((SRSdata[idata]&0xffffff)==0x434441)
 		icounter=0;
 
 	      if((icounter%8)==0) 
 		printf("\n%4d\t",icounter);
 
-	      printf("  0x%08x ",(unsigned int)(SRSdata[idata]));
+	      if(icounter==1)
+		samples = (LSWAP(SRSdata[idata])) & 0xffff;
+
+	      if (((icounter-2)*2)==samples)
+		{
+		  icounter=0;
+		  printf("\n");
+		}
+
+	      if(icounter<2)
+		printf("  0x%08x ",(unsigned int)LSWAP(SRSdata[idata]));
+	      else
+		{
+		  tmpData = (unsigned int)LSWAP(SRSdata[idata]);
+		  printf("   %04x %04x ",
+			 (tmpData&0xFF000000)>>24 | (tmpData&0x00FF0000)>>8, 
+			 (tmpData&0x0000FF00)>>8 | (tmpData&0x000000FF)<<8
+			 );
+		}
 	      icounter++;
 	    }
 	  printf("\n\n");
+	  tipSetBlockLimit(1);
 	}
 #endif /* PRINTOUT_TI */
     }
