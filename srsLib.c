@@ -56,7 +56,7 @@ int srsID[MAX_FEC];
 static int srsSlowControl(char *ip, int port, 
 			  unsigned int *req_fields, int nfields,
 			  unsigned int *ret_data);
-static int srsParseResponse(unsigned int *ibuf, unsigned int *obuf, int nwords);
+static int srsParseResponse(unsigned int *ibuf, unsigned int *obuf, int nwords, int *nerr);
 static int srsPrepareSocket(char *ip_addr,int port_number);
 static int srsSendData();
 static int srsReceiveData(unsigned int *buffer, int nwords);
@@ -197,6 +197,7 @@ srsStatus(char *ip, int pflag)
   printf("                              System Summary\n\n");
 
   printf(" Firmware Version      0x%04x\n",sys[0]&0xffff);
+
   printf(" FEC IP                %d.%d.%d.%d\n",
 	 (sys[3]&0xff000000)>>24, (sys[3]&0xff0000)>>16, 
 	 (sys[3]&0xff00)>>8, (sys[3]&0xff)>>0);
@@ -224,6 +225,7 @@ srsStatus(char *ip, int pflag)
   else
     printf("UNKNOWN");
   printf("\n");
+  printf(" Hardware FW Version   0x%04x\n",sys[0xf]&0xffff);
 
   printf("\n");
   printf(" DTC Config\n");
@@ -991,7 +993,7 @@ srsSlowControl(char *ip, int port,
 	       unsigned int *ret_data)
 {
   unsigned int *response;
-  int iword, nwords=0, maxwords=0;
+  int iword, nwords=0, maxwords=0, nerr=0;
 
   maxwords      = (2*(nfields-4))+4;
   response      = (unsigned int *)malloc(maxwords*sizeof(unsigned int));
@@ -1008,7 +1010,7 @@ srsSlowControl(char *ip, int port,
   SRSLOCK;
   if(srsPrepareSocket(ip, port)<0)
     {
-      printf("%s: Unable to open/prepare socket\n",__FUNCTION__);
+      printf("%s(%s:%d): Unable to open/prepare socket\n",__FUNCTION__,ip,port);
       srsCloseSocket();
 
       if(response)
@@ -1019,7 +1021,7 @@ srsSlowControl(char *ip, int port,
 
   if(srsSendData(req_fields,nfields)<0)
     {
-      printf("%s: Unable to send data\n",__FUNCTION__);
+      printf("%s(%s:%d): Unable to send data\n",__FUNCTION__,ip,port);
       srsCloseSocket();
 
       if(response)
@@ -1031,7 +1033,7 @@ srsSlowControl(char *ip, int port,
   nwords = srsReceiveData(response, maxwords);
   if(nwords<0)
     {
-      printf("%s(%s): Failed to receive data\n",__FUNCTION__,ip);
+      printf("%s(%s:%d): Failed to receive data\n",__FUNCTION__,ip,port);
       srsCloseSocket();
 
       if(response)
@@ -1051,19 +1053,80 @@ srsSlowControl(char *ip, int port,
 
   srsCloseSocket();
 
-  nwords = srsParseResponse(response, ret_data, nwords);
+  nwords = srsParseResponse(response, ret_data, nwords, &nerr);
+
   SRSUNLOCK;
+
+  if(nerr!=0)
+    {
+      printf("%s(%s:%d): %d Errors reported in response.\n",
+	     __FUNCTION__,ip,port,nerr);
+    }
+
+  usleep(100000);
 
   if(response)
     free(response);
-
-  usleep(100000);
 
   return nwords;
 }
 
 static int
-srsParseResponse(unsigned int *ibuf, unsigned int *obuf, int nwords)
+srsDecodeErrorReply(unsigned int error_reply, int pflag)
+{
+  int rval=0;
+  unsigned int err_swapped = bswap_32(error_reply);
+
+  if(err_swapped & 0xF80D007F)
+    {
+      rval=-1;
+      if(pflag)
+	{
+	  printf("%s: Error Reply 0x%08x :\n",__FUNCTION__,err_swapped);
+	  if(err_swapped & (1<<31))
+	    printf("\tDestination Port Unavailable\n");
+
+	  if(err_swapped & (1<<30))
+	    printf("\tIllegal Source Port\n");
+
+	  if(err_swapped & (1<<29))
+	    printf("\tBuffer Full\n");
+
+	  if(err_swapped & (1<<28))
+	    printf("\tIllegal Length (incomplete 32bit word)\n");
+
+	  if(err_swapped & (1<<27))
+	    printf("\tIllegal Length (< 4 words)\n");
+
+	  if(err_swapped & (1<<26))
+	    printf("\tReply ID Error\n");
+
+	  if(err_swapped & (1<<19))
+	    printf("\tCommand Unrecognized\n");
+
+	  if(err_swapped & (1<<18))
+	    printf("\tIllformed Command\n");
+
+	  if(err_swapped & (1<<16))
+	    printf("\tChecksum Error\n");
+
+	  if(err_swapped & (0x7F))
+	    printf("\tI2C Error\n");
+	}
+
+    }
+  else if(err_swapped!=0)
+    {
+      rval = -1;
+      printf("\tUnrecognized Error Code\n");
+    }
+
+
+  return rval;
+}
+
+static int
+srsParseResponse(unsigned int *ibuf, unsigned int *obuf, int nwords, int *err)
 {
   int iword=0, dCnt=0, nerr=0;
 
@@ -1076,7 +1139,7 @@ srsParseResponse(unsigned int *ibuf, unsigned int *obuf, int nwords)
 
   for(iword=4; iword<nwords; iword+=2)
     {
-      if(bswap_32(ibuf[iword])!=0) /* Error condition */
+      if(srsDecodeErrorReply(ibuf[iword],1)==-1) /* Error condition */
 	nerr++;
 
       if(obuf)
@@ -1085,6 +1148,8 @@ srsParseResponse(unsigned int *ibuf, unsigned int *obuf, int nwords)
   
   if(nerr>0)
     printf("%s: %d Error(s) found in reply\n",__FUNCTION__,nerr);
+
+  *err = nerr;
 
   return dCnt;
 }

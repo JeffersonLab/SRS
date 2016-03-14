@@ -172,15 +172,19 @@ main(int argc, char *argv[])
 
       /* Same as call to 
 	 srsExecConfigFile("config/adc_IP10012.txt"); */
+      srsSetDebugMode(1);
+
       DO(srsConfigADC(FEC[ifec],
-		   0xffff, // int reset_mask
-		   0, // int ch0_down_mask
-		   0, // int ch1_down_mask
-		   0, // int eq_level0_mask
-		   0, // int eq_level1_mask
-		   0, // int trgout_enable_mask
-		   0xffff // int bclk_enable_mask
+		      0xff, // int reset_mask
+		      0, // int ch0_down_mask
+		      0, // int ch1_down_mask
+		      0, // int eq_level0_mask
+		      0, // int eq_level1_mask
+		      0, // int trgout_enable_mask
+		      0xff // int bclk_enable_mask
 		      ));
+      
+      srsSetDebugMode(0);
 
       /* Same as call to 
 	 srsExecConfigFile("config/fecCalPulse_IP10012.txt"); */
@@ -240,6 +244,8 @@ main(int argc, char *argv[])
 		      ));
       
     }
+
+  goto CLOSE;
 
   printf("Hit enter to reset stuff\n");
   getchar();

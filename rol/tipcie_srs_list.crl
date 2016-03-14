@@ -28,7 +28,7 @@ const PULSER_FIXED_NUMBER = BLOCKLEVEL
 const PULSER_FIXED_PERIOD = 2
 const PULSER_FIXED_LONG   = 1
 # PULSER_RANDOM_FREQ where arg sets frequency to 500kHz/(2^(arg-1))
-const PULSER_RANDOM_FREQ  = 0x7
+const PULSER_RANDOM_FREQ  = 0x6
 
 const DO_SRS_READOUT = 1
 
@@ -82,7 +82,7 @@ bigendian_out = 1;
       tipSetTriggerSource(TIP_TRIGGER_TSINPUTS);
 
       /* Enable input 1 and 2 */
-      tipEnableTSInput(TIP_TSINPUT_1 | TIP_TSINPUT_2);
+      tipEnableTSInput(TIP_TSINPUT_ALL);
   }
 
   /* Enable self and front panel busy input */
@@ -105,7 +105,7 @@ bigendian_out = 1;
   strncpy(FEC[nfec++], "10.0.0.2",100);
   strncpy(FEC[nfec++], "10.0.1.2",100);
   /* strncpy(FEC[nfec++], "10.0.3.2",100); */
-  /* strncpy(FEC[nfec++], "10.0.4.2",100); */
+  strncpy(FEC[nfec++], "10.0.4.2",100);
   /* strncpy(FEC[nfec++], "10.0.5.2",100); */
   /* strncpy(FEC[nfec++], "10.0.7.2",100); */
 
@@ -115,6 +115,11 @@ bigendian_out = 1;
 
   memset(&srsFD, 0, sizeof(srsFD));
 
+  for(ifec=0; ifec<nfec; ifec++)
+    {
+      srsStatus(FEC[ifec],0);
+    }
+  
   /* Associate FECs with Specific Host IPs and ports */
   for(ifec=0; ifec<nfec; ifec++)
     {
@@ -154,7 +159,7 @@ bigendian_out = 1;
       /* Same as call to 
 	 srsExecConfigFile("config/fecCalPulse_IP10012.txt"); */
       srsSetApvTriggerControl(FEC[ifec],
-			      4, // int mode
+			      4+2, // int mode
 			      0, // int trgburst (x+1)*3 time bins
 			      0x4, // int freq
 			      0x100, // int trgdelay
@@ -163,7 +168,7 @@ bigendian_out = 1;
 			      );
       srsSetEventBuild(FEC[ifec],
 		       0x1ff, // int chEnable
-		       500, // int dataLength
+		       550, // int dataLength
 		       2, // int mode
 		       0, // int eventInfoType
 		       0xaa000bb8 | (ifec<<16) // unsigned int eventInfoData
@@ -401,7 +406,7 @@ begin trigger tipcie_trig
 	 }
        else
 	 {
-#define CHECKFRAMES
+/* #define CHECKFRAMES */
 #ifdef CHECKFRAMES
 	   if(nframes!=10)
 	     {
@@ -442,8 +447,6 @@ begin trigger tipcie_trig
 		     }
 		   icounter++;
 		 }
-	       printf("paused\n");
-	       getchar();
 
 	     }
 #endif
