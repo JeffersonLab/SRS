@@ -48,10 +48,12 @@
 
 static int srsDebugMode=0; 
 static int srsSockFD[MAX_FEC];
+static int srsSockPort[MAX_FEC];
+static char srsFECIP[MAX_FEC][100];
 int nsrsSockFD=0;
 unsigned long long before, after, diff=0;
 int srsFrameNumber[MAX_FEC];
-int srsID[MAX_FEC];
+int srsStartingDataPort = 7000;
 
 static int srsSlowControl(char *ip, int port, 
 			  unsigned int *req_fields, int nfields,
@@ -68,6 +70,77 @@ static unsigned long long int rdtsc(void);
 pthread_mutex_t     srsMutex = PTHREAD_MUTEX_INITIALIZER;
 #define SRSLOCK     if(pthread_mutex_lock(&srsMutex)<0) perror("pthread_mutex_lock");
 #define SRSUNLOCK   if(pthread_mutex_unlock(&srsMutex)<0) perror("pthread_mutex_unlock");
+
+int
+srsInit(char *fecip, char *hostip)
+{
+  int rval=0;
+  
+  if(nsrsSockFD==0)
+    {
+      memset(&srsSockFD, 0, sizeof(srsSockFD));
+      memset(&srsSockPort, 0, sizeof(srsSockPort));
+      memset(&srsFECIP, 0, sizeof(srsFECIP));
+      srsSockPort[nsrsSockFD] = srsStartingDataPort;
+    }
+  else
+    srsSockPort[nsrsSockFD] = srsSockPort[nsrsSockFD-1]+1;
+
+  strncpy(srsFECIP[nsrsSockFD], fecip, 100);
+
+  printf("%s(%s:%d): Connecting data socket... ",
+	 __FUNCTION__,
+	 fecip,
+	 srsSockPort[nsrsSockFD]);
+
+  rval = srsConnect(&srsSockFD[nsrsSockFD], hostip, srsSockPort[nsrsSockFD]);
+  if(rval!=0)
+    {
+      printf(" FAILED!\n");
+      return -1;
+    }
+  
+  printf(" Success.\n");
+  
+  printf("%s(%s:%d): Setting DAQ parameters... ",
+	 __FUNCTION__,
+	 fecip,
+	 srsSockPort[nsrsSockFD]);
+
+  rval = srsSetDAQIP(nsrsSockFD, hostip, srsSockPort[nsrsSockFD]);
+  
+  if(rval!=0)
+    {
+      printf(" FAILED!\n");
+      return -1;
+    }
+  
+  printf(" Success.\n");
+
+  nsrsSockFD++;
+  
+  printf("%s: Initialized %d FEC\n",
+	 __FUNCTION__,nsrsSockFD);
+
+  return nsrsSockFD;
+}
+
+int
+srsClose(int id)
+{
+  if(srsSockFD[id])
+    {
+      close(srsSockFD[id]);
+    }
+  else
+    {
+      printf("%s: ERROR: FEC %d is not initialized\n",
+	     __FUNCTION__,id);
+      return -1;
+    }
+
+  return 0;
+}
 
 int
 srsConnect(int *sockfd, char *ip, int port) /* formally createAndBinSocket */
@@ -125,7 +198,7 @@ srsConnect(int *sockfd, char *ip, int port) /* formally createAndBinSocket */
 	printf("Server : bind() successful\n");
     }
 
-  srsSockFD[nsrsSockFD++] = *sockfd;
+  srsSockFD[nsrsSockFD] = *sockfd;
 
   return 0;
 }
@@ -143,7 +216,7 @@ srsGetID(int sockfd)
 
 
 int
-srsStatus(char *ip, int pflag)
+srsStatus(int id, int pflag)
 {
   const int nsys = 0x10; 
   const int napvapp = 0x10; 
@@ -155,6 +228,15 @@ srsStatus(char *ip, int pflag)
   unsigned int apv[napv];
   unsigned int pll[npll];
   unsigned int adccard[nadccard];
+  char ip[100];
+
+  if(!strlen(srsFECIP[id]))
+    {
+      printf("%s: ERROR: FEC %d is not initialized\n",
+	     __FUNCTION__,id);
+      return -1;
+    }
+  strncpy((char *)&ip, srsFECIP[id], 100);
 
   memset(sys,0,sizeof(sys));
   memset(apvapp,0,sizeof(apvapp));
@@ -192,7 +274,7 @@ srsStatus(char *ip, int pflag)
 #endif
 
   printf("\n");
-  printf("STATUS for SRS device at %s \n",ip);
+  printf("STATUS for FEC %d at %s \n",id,ip);
   printf("--------------------------------------------------------------------------------\n");
   printf("                              System Summary\n\n");
 
@@ -309,7 +391,7 @@ srsStatus(char *ip, int pflag)
 }
 
 int 
-srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blocklevel, int *frameCnt)
+srsReadBlock(int id, volatile unsigned int* buf_in, int nwrds, int blocklevel, int *frameCnt)
 {
   int trigNum=0, n=0;
   struct sockaddr_in cli_addr;  
@@ -320,13 +402,11 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
   unsigned long long total=0;
   int l_errno=0;
   int l_frameCnt=0;
-  int id=0;
-  
-  id=srsGetID(sockfd);
-  if(id==-1)
+
+  if(srsSockFD[id]==0)
     {
-      printf("%s: ERROR: SRS socket file descriptor (%d) not initialized\n",
-	     __FUNCTION__,sockfd);
+      printf("%s: ERROR: FEC %d is not initialized\n",
+	     __FUNCTION__,id);
       return -1;
     }
 
@@ -341,7 +421,7 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
 	       __FUNCTION__,(unsigned long)ptr,nwrds);
 
       before = rdtsc();
-      n = recvfrom(sockfd, (void *)ptr, nwrds*sizeof(unsigned int), 
+      n = recvfrom(srsSockFD[id], (void *)ptr, nwrds*sizeof(unsigned int), 
 		   0, (struct sockaddr*)&cli_addr, &slen); 
       l_errno = errno;
       after = rdtsc();
@@ -426,14 +506,23 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
 }
 
 int
-srsSetDAQIP(char *ip, char *daq_ip, int port)
+srsSetDAQIP(int id, char *daq_ip, int port)
 {
   int stat=0;
   struct in_addr sa;
   const int nregs=2;
   unsigned int reg[nregs];
   unsigned int data[nregs];
-  
+  char ip[100];
+
+  if(!strlen(srsFECIP[id]))
+    {
+      printf("%s: ERROR: FEC %d is not initialized\n",
+	     __FUNCTION__,id);
+      return -1;
+    }
+  strncpy((char *)&ip, srsFECIP[id], 100);
+
   if(inet_pton(AF_INET, daq_ip, &sa)!=1)
     {
       perror("inet_pton");
@@ -446,19 +535,28 @@ srsSetDAQIP(char *ip, char *daq_ip, int port)
   reg[1]  = 0xa;
   data[1] = bswap_32(sa.s_addr);
 
-  stat = srsWritePairs(ip, SRS_SYS_PORT, 0, reg, nregs, data,nregs);
+  stat = srsWritePairs(srsFECIP[id], SRS_SYS_PORT, 0, reg, nregs, data,nregs);
 
   return stat;
 }
 
 int
-srsSetDTCClk(char *ip, int dtcclk_inh, int dtctrg_inh, 
+srsSetDTCClk(int id, int dtcclk_inh, int dtctrg_inh, 
 	    int dtc_swapports, int dtc_swaplanes, int dtctrg_invert)
 {
   int stat=0;
   const int nregs=1;
   unsigned int reg[nregs];
   unsigned int data[nregs];
+  char ip[100];
+
+  if(!strlen(srsFECIP[id]))
+    {
+      printf("%s: ERROR: FEC %d is not initialized\n",
+	     __FUNCTION__,id);
+      return -1;
+    }
+  strncpy((char *)&ip, srsFECIP[id], 100);
 
   reg[0]  = 0xc;
   data[0] = (dtcclk_inh) | (dtctrg_inh<<1) | 
@@ -474,13 +572,22 @@ srsSetDTCClk(char *ip, int dtcclk_inh, int dtctrg_inh,
 }
 
 int
-srsSetDTCC(char *ip, int dataOverEth, int noFlowCtrl, int paddingType,
+srsSetDTCC(int id, int dataOverEth, int noFlowCtrl, int paddingType,
 	   int trgIDEnable, int trgIDAll, int trailerCnt, int paddingByte, int trailerByte)
 {
   int stat=0;
   const int nregs=1;
   unsigned int reg[nregs];
   unsigned int data[nregs];
+  char ip[100];
+
+  if(!strlen(srsFECIP[id]))
+    {
+      printf("%s: ERROR: FEC %d is not initialized\n",
+	     __FUNCTION__,id);
+      return -1;
+    }
+  strncpy((char *)&ip, srsFECIP[id], 100);
 
   dataOverEth = dataOverEth?1:0;
   noFlowCtrl  = noFlowCtrl?1:0;
@@ -529,7 +636,7 @@ srsSetDTCC(char *ip, int dataOverEth, int noFlowCtrl, int paddingType,
 }
 
 int
-srsConfigADC(char *ip,
+srsConfigADC(int id,
 	     int reset_mask, int ch0_down_mask, int ch1_down_mask,
 	     int eq_level0_mask, int eq_level1_mask, int trgout_enable_mask,
 	     int bclk_enable_mask)
@@ -537,6 +644,15 @@ srsConfigADC(char *ip,
   int stat;
   const int nregs=7;
   unsigned int data[nregs];
+  char ip[100];
+
+  if(!strlen(srsFECIP[id]))
+    {
+      printf("%s: ERROR: FEC %d is not initialized\n",
+	     __FUNCTION__,id);
+      return -1;
+    }
+  strncpy((char *)&ip, srsFECIP[id], 100);
 
   memset(data,0,sizeof(data));
 
@@ -556,13 +672,22 @@ srsConfigADC(char *ip,
 }
 
 int
-srsSetApvTriggerControl(char *ip,
+srsSetApvTriggerControl(int id,
 			int mode, int trgburst, int freq,
 			int trgdelay, int tpdelay, int rosync)
 {
   int stat=0;
   const int nregs=6;
   unsigned int data[nregs];
+  char ip[100];
+
+  if(!strlen(srsFECIP[id]))
+    {
+      printf("%s: ERROR: FEC %d is not initialized\n",
+	     __FUNCTION__,id);
+      return -1;
+    }
+  strncpy((char *)&ip, srsFECIP[id], 100);
 
   memset(data,0,sizeof(data));
 
@@ -581,13 +706,22 @@ srsSetApvTriggerControl(char *ip,
 }
 
 int
-srsSetEventBuild(char *ip,
+srsSetEventBuild(int id,
 		 int chEnable, int dataLength, int mode, 
 		 int eventInfoType, unsigned int eventInfoData)
 {
   int stat=0;
   const int nregs=5;
   unsigned int data[nregs];
+  char ip[100];
+
+  if(!strlen(srsFECIP[id]))
+    {
+      printf("%s: ERROR: FEC %d is not initialized\n",
+	     __FUNCTION__,id);
+      return -1;
+    }
+  strncpy((char *)&ip, srsFECIP[id], 100);
 
   memset(data,0,sizeof(data));
 
@@ -605,11 +739,20 @@ srsSetEventBuild(char *ip,
 }
 
 int
-srsTrigEnable(char *ip)
+srsTrigEnable(int id)
 {
   int stat=0;
   const int nregs=1;
   unsigned int data[nregs];
+  char ip[100];
+
+  if(!strlen(srsFECIP[id]))
+    {
+      printf("%s: ERROR: FEC %d is not initialized\n",
+	     __FUNCTION__,id);
+      return -1;
+    }
+  strncpy((char *)&ip, srsFECIP[id], 100);
 
   memset(data,0,sizeof(data));
 
@@ -623,11 +766,20 @@ srsTrigEnable(char *ip)
 }
 
 int
-srsTrigDisable(char *ip)
+srsTrigDisable(int id)
 {
   int stat=0;
   const int nregs=1;
   unsigned int data[nregs];
+  char ip[100];
+
+  if(!strlen(srsFECIP[id]))
+    {
+      printf("%s: ERROR: FEC %d is not initialized\n",
+	     __FUNCTION__,id);
+      return -1;
+    }
+  strncpy((char *)&ip, srsFECIP[id], 100);
 
   memset(data,0,sizeof(data));
 
@@ -641,11 +793,20 @@ srsTrigDisable(char *ip)
 }
 
 int
-srsAPVReset(char *ip)
+srsAPVReset(int id)
 {
   int stat=0;
   const int nregs=1;
   unsigned int data[nregs];
+  char ip[100];
+
+  if(!strlen(srsFECIP[id]))
+    {
+      printf("%s: ERROR: FEC %d is not initialized\n",
+	     __FUNCTION__,id);
+      return -1;
+    }
+  strncpy((char *)&ip, srsFECIP[id], 100);
 
   memset(data,0,sizeof(data));
 
@@ -659,7 +820,7 @@ srsAPVReset(char *ip)
 }
 
 int
-srsAPVConfig(char *ip, int channel_mask, int device_mask,
+srsAPVConfig(int id, int channel_mask, int device_mask,
 	     int mode, int latency, int mux_gain, 
 	     int ipre, int ipcasc, int ipsf, 
 	     int isha, int issf, int ipsp, 
@@ -671,6 +832,15 @@ srsAPVConfig(char *ip, int channel_mask, int device_mask,
   unsigned int regs[nregs];
   unsigned int data[nregs];
   unsigned int subaddr=0;
+  char ip[100];
+
+  if(!strlen(srsFECIP[id]))
+    {
+      printf("%s: ERROR: FEC %d is not initialized\n",
+	     __FUNCTION__,id);
+      return -1;
+    }
+  strncpy((char *)&ip, srsFECIP[id], 100);
 
   if((device_mask<1) || (device_mask>3))
     {
@@ -707,7 +877,7 @@ srsAPVConfig(char *ip, int channel_mask, int device_mask,
 }
 
 int
-srsPLLConfig(char *ip, int channel_mask,
+srsPLLConfig(int id, int channel_mask,
 	     int fine_delay, int trg_delay)
 {
   int stat=0;
@@ -715,6 +885,15 @@ srsPLLConfig(char *ip, int channel_mask,
   unsigned int regs[nregs];
   unsigned int data[nregs];
   unsigned int subaddr=0;
+  char ip[100];
+
+  if(!strlen(srsFECIP[id]))
+    {
+      printf("%s: ERROR: FEC %d is not initialized\n",
+	     __FUNCTION__,id);
+      return -1;
+    }
+  strncpy((char *)&ip, srsFECIP[id], 100);
 
   memset(data,0,sizeof(data));
   memset(regs,0,sizeof(regs));

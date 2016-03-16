@@ -145,21 +145,18 @@ main(int argc, char *argv[])
   int starting_port = 7000;
 
   memset(&srsFD, 0, sizeof(srsFD));
+  memset(&hosts, 0, sizeof(hosts));
 
   for(ifec=0; ifec<nfec; ifec++)
     {
-      sprintf(hosts[ifec],"10.0.0.%d",ifec+3);
-      DO(srsSetDAQIP(FEC[ifec], hosts[ifec], starting_port+ifec));
-      DO(srsConnect((int*)&srsFD[ifec], hosts[ifec], starting_port+ifec));
-    }
+      sprintf((char *)&hosts[ifec],"10.0.0.%d",ifec+3);
 
-
-  for(ifec=0; ifec<nfec; ifec++)
-    {
+      if(srsInit(FEC[ifec], hosts[ifec])<0)
+	printf("ERROR!\n");
 
       /* Same as call to 
 	 srsExecConfigFile("config/set_IP10012.txt"); */
-      DO(srsSetDTCC(FEC[ifec], 
+      DO(srsSetDTCC(ifec, 
 		 1, // int dataOverEth
 		 0, // int noFlowCtrl 
 		 2, // int paddingType
@@ -172,9 +169,9 @@ main(int argc, char *argv[])
 
       /* Same as call to 
 	 srsExecConfigFile("config/adc_IP10012.txt"); */
-      srsSetDebugMode(1);
+      /* srsSetDebugMode(1); */
 
-      DO(srsConfigADC(FEC[ifec],
+      DO(srsConfigADC(ifec,
 		      0xff, // int reset_mask
 		      0, // int ch0_down_mask
 		      0, // int ch1_down_mask
@@ -188,7 +185,7 @@ main(int argc, char *argv[])
 
       /* Same as call to 
 	 srsExecConfigFile("config/fecCalPulse_IP10012.txt"); */
-      DO(srsSetApvTriggerControl(FEC[ifec],
+      DO(srsSetApvTriggerControl(ifec,
 			      4+2, // int mode
 			      4, // int trgburst (x+1)*3 time bins
 			      0x4, // int freq
@@ -196,7 +193,7 @@ main(int argc, char *argv[])
 			      0x7f, // int tpdelay
 			      0x12e // int rosync
 				 ));
-      DO(srsSetEventBuild(FEC[ifec],
+      DO(srsSetEventBuild(ifec,
 			  (1<<chEnable)-1, // int chEnable
 			  2300, // int dataLength
 			  /* 500, // int dataLength */
@@ -207,7 +204,7 @@ main(int argc, char *argv[])
 	
       /* Same as call to 
 	 srsExecConfigFile("config/apv_IP10012.txt"); */
-      DO(srsAPVConfig(FEC[ifec], 
+      DO(srsAPVConfig(ifec, 
 		   0xff, // int channel_mask, 
 		   0x03, // int device_mask,
 		   0x19, // int mode, 
@@ -233,19 +230,17 @@ main(int argc, char *argv[])
 
       /* Same as call to 
 	 srsExecConfigFile("/daqfs/home/moffit/work/SRS/test/config/fecAPVreset_IP10012.txt"); */
-      DO(srsAPVReset(FEC[ifec]));
+      DO(srsAPVReset(ifec));
 
       /* Same as call to 
 	 srsExecConfigFile("config/pll_IP10012.txt"); */
-      DO(srsPLLConfig(FEC[ifec], 
+      DO(srsPLLConfig(ifec, 
 		   0xff, // int channel_mask,
 		   0, // int fine_delay, 
 		   0 // int trg_delay
 		      ));
       
     }
-
-  goto CLOSE;
 
   printf("Hit enter to reset stuff\n");
   getchar();
@@ -265,8 +260,8 @@ main(int argc, char *argv[])
 
   for(ifec=0; ifec<nfec; ifec++)
     {
-      srsTrigEnable(FEC[ifec]);
-      srsStatus(FEC[ifec],0);
+      srsTrigEnable(ifec);
+      srsStatus(ifec,0);
     }
 
 
@@ -302,8 +297,8 @@ main(int argc, char *argv[])
 
   for(ifec=0; ifec<nfec; ifec++)
     {
-      srsTrigDisable(FEC[ifec]);
-      srsStatus(FEC[ifec],0);
+      srsTrigDisable(ifec);
+      srsStatus(ifec,0);
     }
 
  CLOSE:
@@ -316,14 +311,13 @@ void closeup()
   int ifec=0;
   for(ifec=0; ifec<nfec; ifec++)
     {
-      srsStatus(FEC[ifec],0);
+      srsStatus(ifec,0);
     }
 
   sleep(1);
   for(ifec=0; ifec<nfec; ifec++)
     {
-      if(srsFD[ifec])
-	close(srsFD[ifec]);
+      srsClose(ifec);
     }
 
   tipClose();
@@ -374,7 +368,7 @@ mytiISR(int arg)
   for(ifec=0; ifec<nfec; ifec++)
     {
       /* srsSetDebugMode(1); */
-      dCnt_srs = srsReadBlock(srsFD[ifec], 
+      dCnt_srs = srsReadBlock(ifec, 
 			      (volatile unsigned int *)&SRSdata[dCnt_srs_total],
 			      SRS_DATA_SIZE,BLOCKLEVEL,&frameCnt);
       srsSetDebugMode(0);

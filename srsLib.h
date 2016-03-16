@@ -31,36 +31,38 @@
 #define SRS_APV_ALLPLL_MASK 0xFF00
 
 
+int   srsInit(char *fecip, char *hostip);
+int   srsClose(int id);
 int   srsConnect(int *sockfd, char *ip, int port);
-int   srsStatus(char *ip, int pflag);
+int   srsStatus(int id, int pflag);
 int   srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blocklevel,
 		   int *frameCnt);
 
-int   srsSetDAQIP(char *ip, char *daq_ip, int port);
-int   srsSetDTCClk(char *ip, int dtcclk_inh, int dtctrg_inh, 
+int   srsSetDAQIP(int id, char *daq_ip, int port);
+int   srsSetDTCClk(int id, int dtcclk_inh, int dtctrg_inh, 
 		   int dtc_swapports, int dtc_swaplanes, int dtctrg_invert);
-int   srsSetDTCC(char *ip, int dataOverEth, int noFlowCtrl, int paddingType,
+int   srsSetDTCC(int id, int dataOverEth, int noFlowCtrl, int paddingType,
 		 int trgIDEnable, int trgIDAll, int trailerCnt, int paddingByte, int trailerByte);
-int   srsConfigADC(char *ip,
+int   srsConfigADC(int id,
 		  int reset_mask, int ch0_down_mask, int ch1_down_mask,
 		  int eq_level0_mask, int eq_level1_mask, int trgout_enable_mask,
 		  int bclk_enable_mask);
-int   srsSetApvTriggerControl(char *ip,
+int   srsSetApvTriggerControl(int id,
 			     int mode, int trgburst, int freq,
 			     int trgdelay, int tpdelay, int rosync);
-int   srsSetEventBuild(char *ip,
+int   srsSetEventBuild(int id,
 		       int chEnable, int dataLength, int mode, 
 		       int eventInfoType, unsigned int eventInfoData);
-int   srsTrigEnable(char *ip);
-int   srsTrigDisable(char *ip);
-int   srsAPVReset(char *ip);
-int   srsAPVConfig(char *ip, int channel_mask, int device_mask,
+int   srsTrigEnable(int id);
+int   srsTrigDisable(int id);
+int   srsAPVReset(int id);
+int   srsAPVConfig(int id, int channel_mask, int device_mask,
 		   int mode, int latency, int mux_gain, 
 		   int ipre, int ipcasc, int ipsf, 
 		   int isha, int issf, int ipsp, 
 		   int imuxin, int ical, int vsps,
 		   int vfs, int vfp, int cdrv, int csel);
-int   srsPLLConfig(char *ip, int channel_mask,
+int   srsPLLConfig(int id, int channel_mask,
 		   int fine_delay, int trg_delay);
 void  srsSetDebugMode(int enable);
 
