@@ -42,6 +42,9 @@ main(int argc, char *argv[])
 
   /* srsSlowControl(0); */
 
+  if(srsInit("10.0.1.2","10.0.0.3")<0)
+    goto CLOSE;
+
   srsSetDebugMode(1);
 
   /* srsExecConfigFile("config/set_IP10012.txt");sys */
@@ -51,7 +54,7 @@ main(int argc, char *argv[])
   /* srsExecConfigFile("config/fecAPVreset_IP10012.txt"); */
   /* srsExecConfigFile("config/pll_IP10012.txt"); */
 
-  srsStatus("10.0.1.2",0);
+  srsStatus(0,0);
 
  CLOSE:
   closeup();
@@ -61,9 +64,7 @@ main(int argc, char *argv[])
 
 void closeup()
 {
-/*   srsSlowControl(0); */
-  if(sockfd)
-    close(sockfd);
+  srsClose(0);
 }
 
 void sig_handler(int signo)
