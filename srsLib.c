@@ -20,6 +20,7 @@
  *
  * </pre>
  *----------------------------------------------------------------------------*/
+#define _GNU_SOURCE
 
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -44,7 +45,11 @@
 #include <ctype.h>
 #include <byteswap.h>
 #include <pthread.h>
+#include <poll.h>
+#include <signal.h>
 #include "srsLib.h"
+
+#define SOCKET_TIMEOUT 500000
 
 static int srsDebugMode=0; 
 static int srsSockFD[MAX_FEC];
@@ -73,7 +78,7 @@ int
 srsConnect(int *sockfd, char *ip, int port) /* formally createAndBinSocket */
 {
   struct sockaddr_in my_addr; 
-  struct timeval socket_timeout={0,900000}; /* 900 microsecond time out */
+  struct timeval socket_timeout={0,SOCKET_TIMEOUT}; /* 900 microsecond time out */
   int stat=0;
 
   *sockfd = socket(AF_INET, SOCK_DGRAM,0);
@@ -101,8 +106,14 @@ srsConnect(int *sockfd, char *ip, int port) /* formally createAndBinSocket */
     }
 
   int enable = 1;
+
   if (setsockopt(*sockfd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0)
     perror("SO_REUSEADDR failed");
+
+#ifdef SO_REUSEPORT
+  if (setsockopt(*sockfd, SOL_SOCKET, SO_REUSEPORT, &enable, sizeof(int)) < 0)
+    perror("SO_REUSEPORT failed");
+#endif
 
   memset(&my_addr, 0, sizeof(my_addr));
 
@@ -308,6 +319,8 @@ srsStatus(char *ip, int pflag)
   return 0;
 }
 
+static int srsContinueReadoutUntilEmpty=0;
+
 int 
 srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blocklevel, int *frameCnt)
 {
@@ -318,7 +331,6 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
   unsigned int rawdata=0;
   int nwords=0;
   unsigned long long total=0;
-  int l_errno=0;
   int l_frameCnt=0;
   int id=0;
   
@@ -332,6 +344,7 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
 
   srsFrameNumber[id]=0;
 
+  /* SRSLOCK; */
   ptr = (unsigned int*)buf_in; 
 
   while(1)
@@ -343,7 +356,6 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
       before = rdtsc();
       n = recvfrom(sockfd, (void *)ptr, nwrds*sizeof(unsigned int), 
 		   0, (struct sockaddr*)&cli_addr, &slen); 
-      l_errno = errno;
       after = rdtsc();
 
       diff = after-before;
@@ -353,17 +365,19 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
       
       if (n == -1)
 	{ 
-	  if(errno == EAGAIN)
+	  if((errno == EAGAIN) && (srsContinueReadoutUntilEmpty == 0))
 	    printf("%s(%d): timeout\n",__FUNCTION__,id);
-	  else
+	  else if (srsContinueReadoutUntilEmpty == 0)
 	    {
 	      perror("recvfrom");
-	      printf("%s(%d): ERROR",__FUNCTION__,id);
+	      printf("%s(%d): ERROR\n",__FUNCTION__,id);
 	    }
 
 	  if(frameCnt!=NULL)
 	    *frameCnt = l_frameCnt++;
-	  return nwords;
+
+	    /* SRSUNLOCK; */
+	    return nwords;
 	}
 
       if (n>=4)
@@ -395,8 +409,12 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
 	      srsFrameNumber[id]=0;
 	      /* Bump the trigger number */
 	      trigNum++;
-	      if(trigNum==blocklevel) /* Quit... */
-		break;
+
+	      if(srsContinueReadoutUntilEmpty==0)
+		{
+		  if(trigNum==blocklevel) /* Quit... */
+		    break;
+		}
 	    }
 	  else
 	    {
@@ -422,7 +440,80 @@ srsReadBlock(int sockfd, volatile unsigned int* buf_in, int nwrds, int blockleve
     if(frameCnt!=NULL)
       printf("%s: frameCnt = %d\n",__FUNCTION__,*frameCnt);
 
+  /* SRSUNLOCK; */
   return nwords;
+}
+
+int
+srsCheckAndClearBuffers(int *sockfds, int nfds, volatile unsigned int* buf_in,
+			int nwrds, int blocklevel, int *frameCnt)
+{
+  int ifd=0, checkData=1, nret=0, stat=0;
+  struct timespec poll_timeout = {0, 50000}; /* 50 microsecond timeout / poll */
+  struct pollfd poll_set[16];
+
+  while(checkData)
+    {
+      /* Setup the polling variables with the socket file descriptors */
+      for(ifd = 0; ifd < nfds; ifd++)
+	{
+	  poll_set[ifd].fd     = sockfds[ifd];
+	  poll_set[ifd].events = POLLIN;
+	}
+
+      /* Ignore the rest */
+      for(ifd = nfds; ifd < 16; ifd++)
+	{ 
+	  poll_set[ifd].fd     = -1;
+	}
+
+      /* Poll the sockets */
+      stat = ppoll(poll_set, nfds, &poll_timeout, NULL);
+      if(stat < 0)
+	{
+	  /* ppoll error */
+	  perror("poll");
+	  printf("%s: ERROR: ppoll returned %d",
+		 __FUNCTION__, stat);
+	  return -1;
+	}
+      else if (stat == 0)
+	{
+	  /* No Data... Buffers clean */
+	  checkData = 0;
+	}
+      else
+	{
+	  checkData = 1;
+	}
+
+      if(stat>0) /* At least one fd has data available */
+	{
+	  /* Set readblock to keep going, instead of stopping at the trailer */
+	  srsContinueReadoutUntilEmpty=1;
+
+	  for(ifd = 0; ifd < nfds; ifd++)
+	    {
+	      if(poll_set[ifd].revents & POLLIN)
+		{
+		  /* Go do it */
+		  nret = srsReadBlock(poll_set[ifd].fd, buf_in, nwrds, blocklevel, frameCnt);
+	      
+		  if(nret>0)
+		    {
+		      printf("%s: WARN: %d words cleared from socket %d\n",
+			     __FUNCTION__, nret, poll_set[ifd].fd);
+		    }
+		}
+	    }
+
+	  /* Set readblock to stop at the trailer */
+	  srsContinueReadoutUntilEmpty=0;
+
+	}
+    }
+  
+  return nret;
 }
 
 int
@@ -822,6 +913,13 @@ srsReadBurst(char *ip, int port,
       maxregs=0xff;
     }
 
+  if(nregs>maxregs)
+    {
+      printf("%s: WARN: nregs (%d) > maxregs (%d). Using %d.\n",
+	     __FUNCTION__, nregs, maxregs, maxregs);
+      nregs = maxregs;
+    }
+  
   read_command = (unsigned int *)malloc((nregs+3)*sizeof(unsigned int));
   if(read_command==NULL)
     {
@@ -878,6 +976,13 @@ srsWriteBurst(char *ip, int port,
       nregs=0xff;
     }
 
+  if(nregs>maxregs)
+    {
+      printf("%s: WARN: nregs (%d) > maxregs (%d). Using %d.\n",
+	     __FUNCTION__, nregs, maxregs, maxregs);
+      nregs = maxregs;
+    }
+  
   write_command = (unsigned int *)malloc((nregs+4)*sizeof(unsigned int));
   if(write_command==NULL)
     {
@@ -935,6 +1040,13 @@ srsWritePairs(char *ip, int port,
       maxregs=0xff;
     }
 
+  if(nregs>maxregs)
+    {
+      printf("%s: WARN: nregs (%d) > maxregs (%d). Using %d.\n",
+	     __FUNCTION__, nregs, maxregs, maxregs);
+      nregs = maxregs;
+    }
+  
   if(srsDebugMode)
     printf("%s: ip = %s:%d sub_addr = 0x%x  nregs = %d\n",
 	   __FUNCTION__,ip,port,sub_addr,nregs);
@@ -1212,8 +1324,8 @@ srsPrepareSocket(char *ip_addr,int port_number)
   int rval=0;
   struct addrinfo *ai;
   char *h;
-  struct timeval socket_timeout={0,900000}; /* 900 microsecond time out */
-  int stat;
+  struct timeval socket_timeout={0,SOCKET_TIMEOUT}; /* 900 microsecond time out */
+  int stat, enable=1;
 
   g_sockfd = socket(AF_INET,SOCK_DGRAM,0);  
   if(g_sockfd<0)
@@ -1228,9 +1340,25 @@ srsPrepareSocket(char *ip_addr,int port_number)
 		    &socket_timeout,sizeof(socket_timeout));
   if(stat!=0)
     {
-      perror("setsockopt");
+      perror("setsockopt SO_RECVTIMEO");
       rval=-1;
     }
+
+  stat =setsockopt(g_sockfd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int));
+  if(stat!=0)
+    {
+      perror("setsockopt SO_REUSEADDR");
+      rval=-1;
+    }
+
+#ifdef SO_REUSEPORT
+  stat =setsockopt(g_sockfd, SOL_SOCKET, SO_REUSEPORT, &enable, sizeof(int));
+  if(stat!=0)
+    {
+      perror("setsockopt SO_REUSEPORT");
+      rval=-1;
+    }
+#endif
 
   memset(&g_servaddr,0,sizeof(g_servaddr));
   g_servaddr.sin_family = AF_INET;
@@ -1239,6 +1367,7 @@ srsPrepareSocket(char *ip_addr,int port_number)
   // set the source port
   //
   g_servaddr.sin_port = htons(6007);
+  /* g_servaddr.sin_addr.s_addr = htonl(INADDR_ANY); */
   stat = bind(g_sockfd,(struct sockaddr *)& g_servaddr, sizeof(g_servaddr));
   if (stat==-1) 
     {
@@ -1304,16 +1433,16 @@ srsReceiveData(unsigned int *buffer, int nwords)
 {
   int n;
   int dCnt;
-  socklen_t g_len;
   struct sockaddr_in g_cliaddr;
-      
+  socklen_t g_len = sizeof(g_cliaddr);
+
   n = recvfrom(g_sockfd,(void *)buffer,nwords*sizeof(unsigned int),
 	       0,(struct sockaddr *) &g_cliaddr,&g_len);
-  
+
   if(n<0)
     {
       perror("recvfrom");
-      printf("%s: ERROR: Timeout\n",__FUNCTION__);
+      printf("%s: ERROR: Timeout (%d)\n",__FUNCTION__, n);
       return -1;
     }
 
@@ -1361,6 +1490,10 @@ charToHex(char *buffer,int *buf)
 static int
 srsCloseSocket()
 {
+  if(srsDebugMode)
+    printf("%s: Close Socket %d\n",
+	   __FUNCTION__, g_sockfd);
+
   if(g_sockfd)
     {
       if(close(g_sockfd)!=0)
